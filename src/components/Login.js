@@ -1,21 +1,23 @@
+// src/components/Login.js
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { API_BASE_URL } from '../config';
 
-const Login = ({ onLogin }) => {
-  const [credentials, setCredentials] = useState({ 
-    username: '', 
-    password: '' 
+const Login = ({ onLogin, onSwitchToRegister }) => {
+  const [credentials, setCredentials] = useState({
+    username: '',
+    password: ''
   });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const navigate = useNavigate();
 
   const handleSubmit = (e) => {
     e.preventDefault();
     setIsLoading(true);
     setError('');
-    
-    // Send JSON data instead of form data
+
     const loginData = {
       username: credentials.username,
       password: credentials.password
@@ -28,16 +30,14 @@ const Login = ({ onLogin }) => {
     })
     .then(response => {
       console.log('Login response:', response.data);
-      alert('Login successful!');
       onLogin(response.data);
+      navigate('/dashboard');
     })
     .catch(error => {
       console.error('Login error:', error);
       if (error.response) {
-        // Server responded with error
         setError(`Login failed: ${error.response.data?.error || 'Invalid credentials'}`);
       } else if (error.request) {
-        // Network error
         setError('Network error. Please check your connection.');
       } else {
         setError('An unexpected error occurred.');
@@ -48,53 +48,84 @@ const Login = ({ onLogin }) => {
     });
   };
 
+  const handleChange = (e) => {
+    setCredentials(prev => ({
+      ...prev,
+      [e.target.name]: e.target.value
+    }));
+  };
+
+  const switchToRegister = () => {
+    navigate('/register');
+  };
+
   return (
     <div className="login-container">
       <div className="login-card">
         <div className="login-header">
-          <div className="login-logo">📄</div>
-          <h2>Sign in to your account</h2>
-          <p>Document Search System</p>
+          <div className="login-logo">
+            📄
+          </div>
+          <h2>Welcome Back</h2>
+          <p>Sign in to your account</p>
         </div>
+
         <form className="login-form" onSubmit={handleSubmit}>
           <div className="input-group">
             <label htmlFor="username">Username</label>
             <input
-              type="text"
               id="username"
-              placeholder="Enter your username"
+              name="username"
+              type="text"
               value={credentials.username}
-              onChange={(e) => setCredentials({...credentials, username: e.target.value})}
+              onChange={handleChange}
               disabled={isLoading}
-              required
+              placeholder="Enter your username"
+              autoComplete="username"
             />
           </div>
+
           <div className="input-group">
             <label htmlFor="password">Password</label>
             <input
-              type="password"
               id="password"
-              placeholder="Enter your password"
+              name="password"
+              type="password"
               value={credentials.password}
-              onChange={(e) => setCredentials({...credentials, password: e.target.value})}
+              onChange={handleChange}
               disabled={isLoading}
-              required
+              placeholder="Enter your password"
+              autoComplete="current-password"
             />
           </div>
-          
+
           {error && (
             <div className="error-message">
-              <span className="error-icon">⚠️</span>
-              {error}
+              ❌ {error}
             </div>
           )}
-          
-          <button type="submit" className="login-btn" disabled={isLoading}>
-            {isLoading ? 'Signing in...' : 'Sign in'}
+
+          <button
+            type="submit"
+            className="login-btn"
+            disabled={isLoading}
+          >
+            {isLoading ? 'Signing in...' : 'Sign In'}
           </button>
         </form>
+
         <div className="login-footer">
-          <p>Need help? Contact your administrator</p>
+          <span>
+            Don't have an account?{' '}
+            <button
+              type="button"
+              className="link-button"
+              onClick={switchToRegister}
+              disabled={isLoading}
+            >
+              Create Account
+            </button>
+          </span>
         </div>
       </div>
     </div>

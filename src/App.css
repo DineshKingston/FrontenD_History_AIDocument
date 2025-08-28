@@ -1,4 +1,4 @@
-/* App.css - Complete Fixed Styles with Enhanced Search Results */
+/* App.css - Complete Fixed Styles with Enhanced Search Results and Login/Register */
 
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
 
@@ -37,6 +37,12 @@ body {
   max-width: 420px;
   box-shadow: 0 25px 50px rgba(0, 0, 0, 0.15);
   animation: slideUp 0.6s ease-out;
+  transition: transform 0.3s ease;
+}
+
+.login-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 35px 70px rgba(0, 0, 0, 0.2);
 }
 
 @keyframes slideUp {
@@ -83,8 +89,10 @@ body {
   margin-bottom: 24px;
 }
 
+/* ===== INPUT STYLES ===== */
 .input-group {
   margin-bottom: 24px;
+  position: relative;
 }
 
 .input-group label {
@@ -104,6 +112,7 @@ body {
   transition: all 0.3s ease;
   background: #f8fafc;
   font-weight: 500;
+  box-sizing: border-box;
 }
 
 .input-group input:focus {
@@ -111,6 +120,7 @@ body {
   border-color: #667eea;
   background: white;
   box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.1);
+  transform: translateY(-1px);
 }
 
 .input-group input:disabled {
@@ -119,6 +129,12 @@ body {
   opacity: 0.7;
 }
 
+.input-group input::placeholder {
+  color: #9ca3af;
+  font-weight: 400;
+}
+
+/* ===== BUTTON STYLES ===== */
 .login-btn {
   width: 100%;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -131,11 +147,17 @@ body {
   cursor: pointer;
   transition: all 0.3s ease;
   box-shadow: 0 8px 20px rgba(102, 126, 234, 0.3);
+  position: relative;
+  overflow: hidden;
 }
 
 .login-btn:hover:not(:disabled) {
   transform: translateY(-2px);
   box-shadow: 0 12px 30px rgba(102, 126, 234, 0.4);
+}
+
+.login-btn:active:not(:disabled) {
+  transform: translateY(0px);
 }
 
 .login-btn:disabled {
@@ -144,12 +166,123 @@ body {
   transform: none;
 }
 
+/* Loading spinner for button */
+.login-btn:disabled::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 20px;
+  width: 16px;
+  height: 16px;
+  margin-top: -8px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top: 2px solid white;
+  border-radius: 50%;
+  animation: buttonSpin 1s linear infinite;
+}
+
+@keyframes buttonSpin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* ===== FOOTER STYLES ===== */
 .login-footer {
   text-align: center;
   color: #64748b;
   font-size: 14px;
   font-weight: 500;
   margin-top: 24px;
+  padding: 0;
+  line-height: 1.5;
+}
+
+.login-footer span {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+/* ===== LINK BUTTON STYLES ===== */
+.link-button {
+  display: inline;
+  vertical-align: baseline;
+  background: none;
+  border: none;
+  color: #667eea;
+  cursor: pointer;
+  font-size: inherit;
+  font-family: inherit;
+  font-weight: 700;
+  text-decoration: none;
+  padding: 0;
+  margin: 0;
+  white-space: nowrap;
+  transition: color 0.2s ease;
+}
+
+.link-button:hover:not(:disabled) {
+  color: #764ba2;
+  text-decoration: underline;
+}
+
+.link-button:focus {
+  outline: 1px dotted #667eea;
+  outline-offset: 2px;
+  color: #764ba2;
+}
+
+.link-button:disabled {
+  color: #94a3b8;
+  cursor: not-allowed;
+  text-decoration: none;
+}
+
+/* ===== SUCCESS AND ERROR MESSAGE STYLES ===== */
+.success-message {
+  background: linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%);
+  color: #065f46;
+  padding: 16px 20px;
+  border-radius: 12px;
+  border: 1px solid #10b981;
+  margin-bottom: 24px;
+  text-align: center;
+  font-weight: 600;
+  box-shadow: 0 4px 15px rgba(16, 185, 129, 0.15);
+  animation: slideDown 0.4s ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-15px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.error-message {
+  background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%);
+  color: #dc2626;
+  padding: 16px 20px;
+  border-radius: 12px;
+  border: 1px solid #ef4444;
+  margin-bottom: 24px;
+  text-align: center;
+  font-weight: 600;
+  box-shadow: 0 4px 15px rgba(239, 68, 68, 0.15);
+  animation: shake 0.5s ease-in-out;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
 }
 
 /* ===== DASHBOARD STYLES ===== */
@@ -227,9 +360,6 @@ body {
 
 /* ===== COMMON SECTION STYLES ===== */
 .upload-section,
-.sea{
-  padding-bottom: 20px;
-}
 .search-section,
 .ai-section {
   background: white;
@@ -581,7 +711,7 @@ body {
   transform: none;
 }
 
-/* ===== ENHANCED SEARCH RESULTS STYLES ===== */
+/* ===== SEARCH RESULTS STYLES ===== */
 .search-results {
   margin-top: 32px;
   animation: fadeInUp 0.5s ease-out;
@@ -679,21 +809,19 @@ body {
   font-size: 16px;
 }
 
-/* Results Grid - Responsive for 1 or 2+ documents */
+/* Results Grid */
 .results-grid {
   display: grid;
   gap: 24px;
   animation: fadeInUp 0.6s ease-out;
 }
 
-/* Single document - full width */
 .results-grid.single-document {
   grid-template-columns: 1fr;
   max-width: 800px;
   margin: 0 auto;
 }
 
-/* Multiple documents - side by side */
 .results-grid.multiple-documents {
   grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
 }
@@ -1329,23 +1457,6 @@ body {
   color: #64748b;
 }
 
-/* ===== ERROR STYLES ===== */
-.error-message {
-  background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%);
-  color: #dc2626;
-  padding: 20px 24px;
-  border-radius: 12px;
-  border: 1px solid #ef4444;
-  margin: 20px 0;
-  text-align: center;
-  font-weight: 600;
-  box-shadow: 0 4px 15px rgba(239, 68, 68, 0.15);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-}
-
 .error-icon {
   font-size: 20px;
 }
@@ -1365,26 +1476,25 @@ body {
   margin: 0 auto 20px auto;
 }
 
-/* ===== ENHANCED MOBILE RESPONSIVENESS ===== */
+/* ===== MOBILE RESPONSIVENESS ===== */
 @media (max-width: 1024px) {
   .dashboard-main {
     padding: 20px;
   }
-  
+
   .dashboard-header {
     padding: 20px;
   }
-  
+
   .files-grid {
     grid-template-columns: 1fr;
   }
-  
-  /* Search Results - Always stack on tablets */
+
   .results-grid,
   .results-grid.multiple-documents {
     grid-template-columns: 1fr !important;
   }
-  
+
   .result-sentences {
     max-height: 350px;
   }
@@ -1396,193 +1506,223 @@ body {
     gap: 16px;
     text-align: center;
   }
-  
+
   .user-info {
     flex-direction: column;
     gap: 16px;
   }
-  
+
   .search-container {
     flex-direction: column;
   }
-  
+
   .header-actions {
     flex-direction: column;
     gap: 8px;
   }
-  
+
   .files-header {
     flex-direction: column;
     gap: 16px;
     align-items: stretch;
   }
-  
+
   .upload-zone {
     padding: 32px 20px;
   }
-  
+
   .upload-section,
   .search-section,
   .ai-section {
     padding: 24px;
   }
-  
-  /* Mobile Search Results */
+
   .results-grid {
     gap: 16px;
   }
-  
+
   .result-file-header {
     padding: 16px 20px;
   }
-  
+
   .result-file-info {
     gap: 12px;
   }
-  
+
   .result-file-icon {
     width: 40px;
     height: 40px;
     font-size: 20px;
   }
-  
+
   .result-file-details h4 {
     font-size: 16px;
   }
-  
+
   .result-sentences {
     padding: 16px;
     max-height: 300px;
   }
-  
+
   .sentence-item {
     padding: 12px;
     gap: 12px;
     flex-direction: column;
   }
-  
+
   .sentence-number {
     align-self: flex-start;
     width: 28px;
     height: 28px;
     font-size: 12px;
   }
-  
+
   .sentence-content {
     font-size: 13px;
     line-height: 1.5;
   }
-  
+
   .result-file-footer {
     padding: 12px 20px;
   }
-  
+
   .chat-header {
     flex-direction: column;
     gap: 16px;
     align-items: flex-start;
     padding: 20px;
   }
-  
+
   .chat-actions {
     align-self: stretch;
     justify-content: space-between;
   }
-  
+
   .message {
     max-width: 95%;
   }
-  
+
   .suggested-questions {
     flex-direction: column;
   }
-  
+
   .suggested-questions button {
     text-align: left;
   }
-  
+
   .chat-messages {
     height: 350px;
     padding: 20px;
   }
-  
+
   .chat-input-container {
     padding: 20px;
   }
 }
 
+/* ===== MOBILE STYLES FOR LOGIN/REGISTER ===== */
 @media (max-width: 480px) {
   .login-card {
     padding: 32px 24px;
+    margin: 20px;
+    max-width: 90%;
   }
-  
+
+  .login-footer {
+    font-size: 13px;
+    line-height: 1.4;
+  }
+
+  .link-button {
+    font-size: 13px;
+  }
+
+  .input-group input {
+    font-size: 16px;
+    padding: 14px 16px;
+  }
+
+  .login-btn {
+    font-size: 15px;
+    padding: 16px;
+  }
+
+  .login-header h2 {
+    font-size: 28px;
+  }
+
+  .login-logo {
+    width: 64px;
+    height: 64px;
+    font-size: 28px;
+  }
+
   .dashboard-header h1 {
     font-size: 20px;
   }
-  
+
   .upload-zone {
     padding: 24px 16px;
   }
-  
+
   .upload-icon {
     font-size: 48px;
   }
-  
+
   .search-section,
   .upload-section,
   .ai-section {
     padding: 16px;
   }
-  
-  /* Extra small mobile search results */
+
   .results-summary {
     padding: 16px;
   }
-  
+
   .results-summary h3 {
     font-size: 18px;
   }
-  
+
   .result-file {
     max-height: 500px;
   }
-  
+
   .result-sentences {
     max-height: 250px;
     padding: 12px;
   }
-  
+
   .sentence-item {
     padding: 10px;
   }
-  
+
   .sentence-content {
     font-size: 12px;
   }
-  
+
   .chat-header {
     padding: 16px;
   }
-  
+
   .chat-title h3 {
     font-size: 18px;
   }
-  
+
   .ai-icon {
     font-size: 24px;
   }
-  
+
   .chat-messages {
     height: 300px;
     padding: 16px;
   }
-  
+
   .message-avatar {
     width: 36px;
     height: 36px;
     font-size: 16px;
   }
-  
+
   .chat-input button {
     width: 44px;
     height: 44px;
