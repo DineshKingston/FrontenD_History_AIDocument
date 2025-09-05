@@ -22,6 +22,7 @@ const FileUpload = ({ onFilesUpload, uploadedFiles, isLoading, onClear }) => {
       onFilesUpload(files, true); // true = append to existing files
     }
   };
+  
 
   // FIXED: Combine new files with existing files
   const handleFileSelect = (e) => {
@@ -45,8 +46,8 @@ const FileUpload = ({ onFilesUpload, uploadedFiles, isLoading, onClear }) => {
   return (
     <div className="file-upload-section">
       <div className="section-header">
-        <h2>📁 Upload Documents</h2>
-        <p>Upload multiple PDF, DOCX, DOC, or TXT files for searching</p>
+        {/* <h2>📁 Upload Documents</h2>
+        <p>Upload multiple PDF, DOCX, DOC, or TXT files for searching</p> */}
       </div>
       
       <div 

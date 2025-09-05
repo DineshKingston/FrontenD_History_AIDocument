@@ -58,17 +58,14 @@ const Register = ({ onLogin, onSwitchToLogin }) => {
       if (response.ok) {
         console.log('Registration successful:', data);
         setSuccess('✅ Registration successful! Redirecting to login...');
-        
         setCredentials({
           username: '',
           password: '',
           confirmPassword: ''
         });
-
         setTimeout(() => {
           navigate('/login');
         }, 2000);
-
       } else {
         setError(`Registration failed: ${data.error || 'Unknown error'}`);
       }
@@ -96,92 +93,92 @@ const Register = ({ onLogin, onSwitchToLogin }) => {
   };
 
   return (
-    <div className="login-container">
-      <div className="login-card">
-        <div className="login-header">
-          <div className="login-logo">
-            📄
-          </div>
+    <div className="auth-wrapper">
+      <div className="auth-card">
+        <div className="auth-header">
+          <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>📄</div>
           <h2>Create Account</h2>
           <p>Join the Document Search System</p>
         </div>
 
+        {error && (
+          <div className="error-banner">
+            <span>⚠️</span>
+            {error}
+          </div>
+        )}
+
         {success && (
-          <div className="success-message">
+          <div className="success-banner">
+            <span>✅</span>
             {success}
           </div>
         )}
 
-        <form className="login-form" onSubmit={handleSubmit}>
-          <div className="input-group">
+        <form onSubmit={handleSubmit}>
+          <div className="form-group">
             <label htmlFor="username">Username</label>
             <input
+              type="text"
               id="username"
               name="username"
-              type="text"
               value={credentials.username}
               onChange={handleChange}
-              disabled={isLoading}
               placeholder="Enter your username"
-              autoComplete="username"
+              required
+              disabled={isLoading}
             />
           </div>
 
-          <div className="input-group">
+          <div className="form-group">
             <label htmlFor="password">Password</label>
             <input
+              type="password"
               id="password"
               name="password"
-              type="password"
               value={credentials.password}
               onChange={handleChange}
-              disabled={isLoading}
               placeholder="Enter your password"
-              autoComplete="new-password"
+              required
+              disabled={isLoading}
             />
           </div>
 
-          <div className="input-group">
+          <div className="form-group">
             <label htmlFor="confirmPassword">Confirm Password</label>
             <input
+              type="password"
               id="confirmPassword"
               name="confirmPassword"
-              type="password"
               value={credentials.confirmPassword}
               onChange={handleChange}
-              disabled={isLoading}
               placeholder="Confirm your password"
-              autoComplete="new-password"
+              required
+              disabled={isLoading}
             />
           </div>
 
-          {error && (
-            <div className="error-message">
-              ❌ {error}
-            </div>
-          )}
-
-          <button
-            type="submit"
-            className="login-btn"
+          <button 
+            type="submit" 
+            className="auth-btn"
             disabled={isLoading}
           >
-            {isLoading ? 'Creating Account...' : 'Create Account'}
+            {isLoading ? (
+              <div className="form-loading">
+                <div className="form-spinner"></div>
+                Creating Account...
+              </div>
+            ) : (
+              'Create Account'
+            )}
           </button>
         </form>
 
-        <div className="login-footer">
-          <span>
-            Already have an account?{' '}
-            <button
-              type="button"
-              className="link-button"
-              onClick={switchToLogin}
-              disabled={isLoading}
-            >
-              Sign In
-            </button>
-          </span>
+        <div className="auth-switch">
+          <p>Already have an account?</p>
+          <a href="#" onClick={(e) => { e.preventDefault(); switchToLogin(); }}>
+            Sign In
+          </a>
         </div>
       </div>
     </div>
