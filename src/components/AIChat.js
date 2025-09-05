@@ -1,7 +1,31 @@
 // src/components/AIChat.js
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { API_BASE_URL } from '../config';
-
+const MessageComponent = ({ message }) => {
+    const isUser = message.type === 'user';
+    
+    return (
+        <div style={{
+            display: 'flex',
+            justifyContent: isUser ? 'flex-end' : 'flex-start',
+            marginBottom: '12px',
+            padding: '0 16px'
+        }}>
+            <div style={{
+                maxWidth: '80%',
+                padding: '12px 16px',
+                borderRadius: '12px',
+                backgroundColor: isUser ? '#007bff' : '#f1f3f4',
+                color: isUser ? '#ffffff' : '#333333',
+                fontSize: '14px',
+                lineHeight: '1.4',
+                whiteSpace: 'pre-wrap'
+            }}>
+                {message.content}
+            </div>
+        </div>
+    );
+};
 const AIChat = ({ 
   uploadedFiles, 
   user, 
@@ -21,6 +45,7 @@ const AIChat = ({
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const [isExpanded, setIsExpanded] = useState(!isMobile);
   const [isInitialized, setIsInitialized] = useState(false);
+  const initializationRef = useRef(false);
 
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
@@ -46,45 +71,102 @@ const AIChat = ({
     scrollToBottom();
   }, [messages, scrollToBottom]);
 
-  // Initialize messages with personalization
-  useEffect(() => {
+useEffect(() => {
     if (!isInitialized && !isSessionLoading) {
-      console.log('🔄 Initializing AIChat for session');
-      
-      if (initialMessages && initialMessages.length > 0) {
-        const restoredMessages = initialMessages.map(msg => ({
-          id: msg.id || Date.now() + Math.random(),
-          type: msg.type?.toLowerCase() || 'ai',
-          content: msg.content || '',
-          timestamp: new Date(msg.timestamp || Date.now())
-        }));
-        setMessages(restoredMessages);
-        setFilesUploaded(true);
-        console.log('✅ Restored session messages:', restoredMessages.length);
-      } else if (uploadedFiles.length > 0) {
-        const welcomeMessage = {
-          id: Date.now(),
-          type: 'ai',
-          content: `Hello ${user?.username || 'User'}! I'm your AI assistant. I've detected ${uploadedFiles.length} document(s) for upload. I'll process them now so you can ask questions about ALL the documents together.`,
-          timestamp: new Date()
-        };
-        setMessages([welcomeMessage]);
-        setFilesUploaded(true);
-        console.log('✅ Created welcome message for session');
-      } else {
-        setMessages([]);
-        setFilesUploaded(false);
-        console.log('✅ Initialized empty session');
-      }
-      
-      setIsInitialized(true);
+        initializationRef.current = true;
+        console.log('🔄 Initializing AIChat for session');
+        
+        if (initialMessages && initialMessages.length > 0) {
+            // ✅ ENHANCED: Properly restore ALL message types
+            const restoredMessages = initialMessages.map(msg => {
+                // Handle different message structures from backend
+                const messageContent = msg.content || msg.response || msg.text || '';
+                const messageType = (msg.type || 'ai').toLowerCase();
+                
+                return {
+                    id: msg.id || `restored_${Date.now()}_${Math.random()}`,
+                    type: messageType === 'user' ? 'user' : 'ai',
+                    content: messageContent,
+                    timestamp: new Date(msg.timestamp || Date.now()),
+                    isRestored: true 
+                };
+            }).filter(msg => msg.content && msg.content.trim().length > 0);
+
+            console.log(`Setting ${restoredMessages.length} New messages:`, restoredMessages);
+            
+            // ✅ FIX: Combine messages instead of appending later
+            const confirmationMessage = {
+                id: `restoration_${Date.now()}`,
+                type: 'ai',
+                content: `🔄 **Fresh Session Ready!**\n\n📁 **Documents**: Ready for search and AI analysis\n\n*Start asking questions about your documents!*`,
+                timestamp: new Date(),
+                isRestored: false
+            };
+            
+            // ✅ Set all messages at once - no setTimeout needed
+            const allMessages = [...restoredMessages, confirmationMessage];
+            const uniqueMessages = deduplicateMessages(allMessages);
+            console.log(`Setting ${uniqueMessages.length} unique messages:`, uniqueMessages);
+            setMessages(uniqueMessages);
+            setFilesUploaded(true);
+            
+        } else if (uploadedFiles.length > 0) {
+            // New session with uploaded files
+            const welcomeMessage = {
+                id: Date.now(),
+                type: 'ai',
+                content: `Hello ${user?.username || 'User'}! I'm your AI assistant. I've detected ${uploadedFiles.length} document(s) for upload. I'll process them now so you can ask questions about ALL the documents together.`,
+                timestamp: new Date()
+            };
+            setMessages([welcomeMessage]);
+            setFilesUploaded(true);
+        } else {
+            // Empty session
+            setMessages([]);
+            setFilesUploaded(false);
+        }
+        
+        setIsInitialized(true);
     }
-  }, [initialMessages, uploadedFiles.length, isSessionLoading, isInitialized, user?.username]);
+}, [initialMessages, uploadedFiles.length, isSessionLoading, isInitialized, user?.username]);
+
+useEffect(() => {
+        if (isSessionLoading) {
+            initializationRef.current = false;
+            setIsInitialized(false);
+        }
+    }, [isSessionLoading]);
 
   // Upload files with personalization
   useEffect(() => {
     const uploadAllFilesToBackend = async () => {
       const regularFiles = uploadedFiles.filter(f => !f.isFromSession);
+      const restoredFiles = uploadedFiles.filter(f => f.isFromSession);
+
+      // ✅ ADD: Handle restored files
+        if (restoredFiles.length > 0 && isInitialized) {
+            console.log(`🔄 Processing ${restoredFiles.length} restored files for AI backend`);
+            for (const fileData of restoredFiles) {
+                if (fileData.text && fileData.text.length > 100) {
+                    try {
+                        const blob = new Blob([fileData.text], { type: 'text/plain' });
+                        const file = new File([blob], fileData.name, { type: 'text/plain' });
+                        const formData = new FormData();
+                        formData.append('file', file);
+                        
+                        await fetch(`${API_BASE_URL}/api/ai/upload`, {
+                            method: 'POST',
+                            body: formData
+                        });
+                        
+                        console.log(`✅ Re-uploaded restored file: ${fileData.name}`);
+                    } catch (error) {
+                        console.warn(`Failed to re-upload ${fileData.name}:`, error);
+                    }
+                }
+            }
+            setFilesUploaded(true);
+        }
       
       if (regularFiles.length > 0 && !filesUploaded && !isSessionLoading && isInitialized) {
         try {
@@ -176,6 +258,7 @@ const AIChat = ({
       uploadAllFilesToBackend();
     }
   }, [uploadedFiles, filesUploaded, isSessionLoading, onRecordMessage, isInitialized, user?.username]);
+  
 
   // Better suggested questions
   const suggestedQuestions = useMemo(() => [
@@ -269,27 +352,68 @@ const AIChat = ({
     return output;
   }, [uploadedFiles]);
 
-  // ✅ FIXED: Complete tryAIQuery function with proper rate limiting
-  const tryAIQuery = useCallback(async (question) => {
+// ✅ Enhanced deduplication with content check
+const deduplicateMessages = useCallback((messages) => {
+    const seen = new Map();
+    return messages.filter(msg => {
+        const key = `${msg.id}_${msg.content?.substring(0, 50)}`;
+        if (seen.has(key)) {
+            console.log(`🚫 Skipping duplicate message: ${msg.id}`);
+            return false;
+        }
+        seen.set(key, true);
+        return true;
+    });
+}, []);
+
+
+
+// ✅ ENHANCED: Sanitized AI query with better error handling
+const tryAIQuery = useCallback(async (question) => {
     if (!question.trim()) return;
 
-    console.log('🚀 Sending request:', { question });
+    // ✅ SANITIZE: Clean the question before sending
+    const sanitizedQuestion = question
+        .replace(/[📄🔍📊💡🤖👤]/g, '')
+        .replace(/[^\w\s\-.,?!]/g, '')
+        .trim();
 
-    // ✅ Check rate limiting
+    if (!sanitizedQuestion) {
+        const errorMessage = {
+            id: Date.now(),
+            type: 'ai',
+            content: `⚠️ **Question Cleaning Required**\n\nYour question contains special characters that need to be cleaned for AI processing.\n\n**Original:** "${question}"\n**Cleaned:** Please rephrase without special characters.`,
+            timestamp: new Date()
+        };
+        setMessages(prev => [...prev, errorMessage]);
+        return;
+    }
+    const sessionAwareQuestion = uploadedFiles.some(f => f.isFromSession) 
+        ? `${sanitizedQuestion} (Session: ${uploadedFiles[0]?.sessionId?.slice(-8)})` 
+        : sanitizedQuestion;
+
+    console.log('🚀 Sending session-aware request:', { 
+        original: question, 
+        sanitized: sanitizedQuestion,
+        sessionAware: sessionAwareQuestion
+    });
+
+
+    // ✅ Rate limiting check
     const now = Date.now();
     const timeSinceLastRequest = now - lastAIRequestTime;
-    const minInterval = 6000; // 6 seconds between requests
-    
+    const minInterval = 6000;
+
     if (timeSinceLastRequest < minInterval) {
-      const waitTime = Math.ceil((minInterval - timeSinceLastRequest) / 1000);
-      const rateLimitMessage = {
-        id: Date.now(),
-        type: 'ai',
-        content: `⏳ **Please wait ${waitTime} seconds** before asking another question.\n\nThis helps ensure reliable AI responses and prevents rate limiting.`,
-        timestamp: new Date()
-      };
-      setMessages(prev => [...prev, rateLimitMessage]);
-      return;
+        const waitTime = Math.ceil((minInterval - timeSinceLastRequest) / 1000);
+        const rateLimitMessage = {
+            id: Date.now(),
+            type: 'ai',
+            content: `⏳ **Please wait ${waitTime} seconds** before asking another question.\n\nThis helps ensure reliable AI responses and prevents rate limiting.`,
+            timestamp: new Date()
+        };
+        setMessages(prev => [...prev, rateLimitMessage]);
+        return;
     }
 
     setIsLoading(true);
@@ -297,72 +421,130 @@ const AIChat = ({
     setLastAIRequestTime(now);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/ai/ask`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: question })
-      });
-
-      console.log('📡 Response status:', response.status);
-      const data = await response.json();
-
-      if (response.ok && data.success) {
-        console.log('✅ AI Response:', data);
-        
-        // ✅ Check for rate limit in response
-        if (data.answer.includes('Rate limit exceeded') || data.answer.includes('high demand')) {
-          const rateLimitResponse = {
-            id: Date.now() + 1,
-            type: 'ai',
-            content: `⏳ **AI is currently busy** - let me search your documents instead!\n\n🔍 **Search Results for:** "${question}"\n\n${searchInLocalFiles(question)}\n\n💡 **Tip:** Try your AI question again in 30 seconds for a full AI analysis.`,
-            timestamp: new Date()
-          };
-          setMessages(prev => [...prev, rateLimitResponse]);
-        } else {
-          const aiMessage = {
-            id: Date.now() + 1,
-            type: 'ai',
-            content: data.answer,
-            timestamp: new Date()
-          };
-          setMessages(prev => [...prev, aiMessage]);
-
-          if (onRecordMessage) {
-            onRecordMessage('AI', data.answer, JSON.stringify({
-              action: 'ai_response',
-              question: question,
-              documentsAnalyzed: data.documentsAnalyzed,
-              timestamp: new Date().toISOString()
-            }));
-          }
-        }
-      } else {
-        console.log('🔍 AI backend unavailable - using enhanced search instead');
-        const searchResult = searchInLocalFiles(question);
-        const fallbackMessage = {
-          id: Date.now() + 1,
-          type: 'ai',
-          content: `🔍 **Enhanced Search Results**\n\n**Your Question:** ${question}\n\n**Found in Documents:**\n\n${searchResult}\n\n⚠️ AI service is temporarily busy. This comprehensive search provides detailed information from your documents.`,
-          timestamp: new Date()
+        // ✅ ENHANCED: Better request payload
+        const requestPayload = {
+            question: sessionAwareQuestion,
+            metadata: {
+                userId: user?.userId || 'anonymous',
+                sessionId: uploadedFiles[0]?.sessionId || 'unknown',
+                documentCount: uploadedFiles.length,
+                timestamp: new Date().toISOString(),
+                originalQuestion: sanitizedQuestion,
+                sessionContext: {
+                  isRestoredSesion: uploadedFiles.some(f => f.isFromSession),
+                  sessionSwitchTime: Date.now(),
+                  requestId: `${Date.now()}_${Math.random()}`
+                }
+            }
         };
-        setMessages(prev => [...prev, fallbackMessage]);
-      }
+
+        console.log('📤 Request payload:', requestPayload);
+        const hasRestoredFiles = uploadedFiles.some(f => f.isFromSession);
+        if (hasRestoredFiles) {
+            console.log('⚠️ Detected restored session files - AI backend may need documents');
+        }
+
+        const response = await fetch(`${API_BASE_URL}/api/ai/ask`, {
+            method: 'POST',
+            headers: { 
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            },
+            body: JSON.stringify(requestPayload)
+        });
+
+        console.log('📡 Response status:', response.status);
+
+        if (response.ok) {
+            const data = await response.json();
+            console.log('✅ AI Response received:', data);
+
+            if (data.success && data.answer) {
+                // ✅ Check for rate limit in response content
+                if (data.answer.includes('Rate limit exceeded') || 
+                    data.answer.includes('high demand') ||
+                    data.answer.includes('⏳')) {
+                    
+                    const fallbackResponse = {
+                        id: Date.now() + 1,
+                        type: 'ai',
+                        content: `⏳ **AI is currently busy** - here are comprehensive search results instead!\n\n🔍 **Search Results for:** "${sanitizedQuestion}"\n\n${searchInLocalFiles(sanitizedQuestion)}\n\n💡 **Tip:** Try your AI question again in 30 seconds for full AI analysis.`,
+                        timestamp: new Date()
+                    };
+                    setMessages(prev => [...prev, fallbackResponse]);
+                } else {
+                    const aiMessage = {
+                        id: Date.now() + 1,
+                        type: 'ai',
+                        content: data.answer,
+                        timestamp: new Date()
+                    };
+                    setMessages(prev => [...prev, aiMessage]);
+
+                    if (onRecordMessage) {
+                        onRecordMessage('AI', data.answer, JSON.stringify({
+                            action: 'ai_response',
+                            question: sanitizedQuestion,
+                            originalQuestion: question,
+                            documentsAnalyzed: data.documentsAnalyzed,
+                            timestamp: new Date().toISOString()
+                        }));
+                    }
+                }
+            } else {
+                throw new Error(data.error || 'Invalid response format');
+            }
+        } else {
+            // ✅ ENHANCED: Better error handling for different status codes
+            let errorMessage = '';
+            
+            try {
+                const errorData = await response.json();
+                errorMessage = errorData.error || errorData.message || 'Unknown error';
+            } catch {
+                errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+            }
+
+            console.log('❌ AI backend error:', response.status, errorMessage);
+
+            if (response.status === 400) {
+                const badRequestMessage = {
+                    id: Date.now() + 1,
+                    type: 'ai',
+                    content: `🔍 **Smart Search Results** (AI request format issue)\n\n**Your Question:** "${question}"\n\n**Comprehensive Results:**\n\n${searchInLocalFiles(sanitizedQuestion)}\n\n⚠️ **Note:** The AI service had trouble processing your request format. Search results provide detailed information from your documents.\n\n**Error Details:** ${errorMessage}`,
+                    timestamp: new Date()
+                };
+                setMessages(prev => [...prev, badRequestMessage]);
+            } else {
+                // Fallback to search for other errors
+                const searchResult = searchInLocalFiles(sanitizedQuestion);
+                const fallbackMessage = {
+                    id: Date.now() + 1,
+                    type: 'ai',
+                    content: `🔍 **Enhanced Search Results** (AI temporarily unavailable)\n\n**Your Question:** "${question}"\n\n**Found in Documents:**\n\n${searchResult}`,
+                    timestamp: new Date()
+                };
+                setMessages(prev => [...prev, fallbackMessage]);
+            }
+        }
 
     } catch (error) {
-      console.error('❌ AI Query Error:', error);
-      const searchResult = searchInLocalFiles(question);
-      const errorMessage = {
-        id: Date.now() + 1,
-        type: 'ai', 
-        content: `🔍 **Smart Search Response** (AI temporarily unavailable)\n\n**Your Question:** ${question}\n\n**Results from Documents:**\n\n${searchResult}`,
-        timestamp: new Date()
-      };
-      setMessages(prev => [...prev, errorMessage]);
+        console.error('❌ AI Query Network Error:', error);
+        
+        const searchResult = searchInLocalFiles(sanitizedQuestion);
+        const errorMessage = {
+            id: Date.now() + 1,
+            type: 'ai',
+            content: `🔍 **Smart Search Response** (Network error)\n\n**Your Question:** "${question}"\n\n**Results from Documents:**\n\n${searchResult}\n\n**Technical Error:** ${error.message}`,
+            timestamp: new Date()
+        };
+        setMessages(prev => [...prev, errorMessage]);
     } finally {
-      setIsLoading(false);
-      setIsTyping(false);
+        setIsLoading(false);
+        setIsTyping(false);
     }
-  }, [lastAIRequestTime, setLastAIRequestTime, searchInLocalFiles, onRecordMessage]);
+}, [lastAIRequestTime, setLastAIRequestTime, searchInLocalFiles, onRecordMessage, user?.userId, uploadedFiles]);
+
 
   // ✅ FIXED: Complete sendMessage function
   const sendMessage = useCallback(async () => {
@@ -376,7 +558,7 @@ const AIChat = ({
         content: `📁 **No Documents Found for ${user?.username}**\n\nPlease upload some documents first to start our conversation.`,
         timestamp: new Date()
       };
-      setMessages(prev => [...prev, noFilesMessage]);
+      setMessages(prev => deduplicateMessages([...prev, noFilesMessage]));
       return;
     }
 
@@ -388,7 +570,7 @@ const AIChat = ({
       timestamp: new Date()
     };
 
-    setMessages(prev => [...prev, userMessage]);
+    setMessages(prev => deduplicateMessages([...prev, userMessage]));
     
     if (onRecordMessage) {
       onRecordMessage('USER', inputMessage, JSON.stringify({

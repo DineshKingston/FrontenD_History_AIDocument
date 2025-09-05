@@ -104,6 +104,7 @@ const Dashboard = ({ user, onLogout }) => {
   }
 };
 
+
   // Clear all session data
   const clearAllSessionData = () => {
     setUploadedFiles([]);
@@ -187,34 +188,54 @@ const Dashboard = ({ user, onLogout }) => {
     });
   };
 
-  const recordInUnifiedSession = async (activityType, activityData) => {
-  if (!user?.userId || !currentSessionId) return;
-  
-  try {
-    if (activityType === 'DOCUMENT_UPLOAD') {
-      const metadata = sanitizeMetadata({
-        userId: user.userId,
-        documentId: activityData.documentId,
-        fileName: activityData.fileName,
-        fileType: activityData.fileType,
-        fileSize: activityData.fileSize,
-        textContent: activityData.textContent, // ✅ ADD THIS LINE
-        contentLength: activityData.textContent ? activityData.textContent.length : 0 // ✅ ADD THIS LINE
-      });
-      
-      await fetch(`${API_BASE_URL}/api/history/document/add`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(metadata)
-      });
+const recordInUnifiedSession = async (activityType, activityData) => {
+    if (!user?.userId || !currentSessionId) return;
+    try {
+        if (activityType === 'DOCUMENT_UPLOAD') {
+            const metadata = sanitizeMetadata({
+                userId: user.userId,
+                documentId: activityData.documentId,
+                fileName: activityData.fileName,
+                fileType: activityData.fileType,
+                fileSize: activityData.fileSize,
+                textContent: activityData.textContent,
+                contentLength: activityData.textContent ? activityData.textContent.length : 0
+            });
+            await fetch(`${API_BASE_URL}/api/history/document/add`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(metadata)
+            });
+        }
+        // ✅ ADD MISSING CASES
+        else if (activityType === 'SEARCH') {
+            await fetch(`${API_BASE_URL}/api/history/search/add`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    userId: user.userId,
+                    query: activityData.query,
+                    queryType: activityData.queryType,
+                    resultsCount: activityData.resultsCount
+                })
+            });
+        }
+        else if (activityType === 'AI_CHAT') {
+            await fetch(`${API_BASE_URL}/api/history/ai/message`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    userId: user.userId,
+                    question: activityData.question,
+                    aiResponse: activityData.aiResponse,
+                    metadata: activityData.metadata
+                })
+            });
+        }
+    } catch (error) {
+        console.error(`Error recording ${activityType}:`, error);
     }
-    // ... rest of your existing code
-  } catch (error) {
-    console.error(`Error recording ${activityType}:`, error);
-  }
 };
-
-
   // FIXED: Handle file upload in unified session
   const handleFilesUpload = async (newFiles, appendToExisting = false) => {
     if (!currentSessionId) {
@@ -237,63 +258,57 @@ const Dashboard = ({ user, onLogout }) => {
         return;
       }
 
-      const processedNewFiles = await Promise.all(
-        uniqueNewFiles.map(async (file, index) => {
-          if (!validateFileType(file)) {
+const processedNewFiles = await Promise.all(
+    uniqueNewFiles.map(async (file, index) => {
+        if (!validateFileType(file)) {
             throw new Error(`Unsupported file type: ${file.name}`);
-          }
+        }
 
-          const text = await readFileContent(file);
-          
-          // Upload to AI backend
-          const formData = new FormData();
-          formData.append('file', file);
+        const text = await readFileContent(file);
+        console.log(`📄 Extracted ${text.length} characters from ${file.name}`);
 
-          try {
+        // ✅ CRITICAL: Store in AI backend first
+        const formData = new FormData();
+        formData.append('file', file);
+        try {
             const response = await fetch(`${API_BASE_URL}/api/ai/upload`, {
-              method: 'POST',
-              body: formData
+                method: 'POST',
+                body: formData
             });
             if (response.ok) {
-              console.log(`✅ AI backend upload successful for ${file.name}`);
+                console.log(`✅ AI backend upload successful for ${file.name}`);
             }
-          } catch (backendError) {
+        } catch (backendError) {
             console.warn(`AI backend upload error for ${file.name}:`, backendError);
-          }
+        }
 
-          const fileData = {
+        const fileData = {
             id: `${currentSessionId}_doc_${Date.now()}_${index}`,
             file: file,
             name: file.name,
             type: file.type,
             size: file.size,
-            text: text,
+            text: text, // ✅ Full text content
             uploadTime: new Date(),
             sessionId: currentSessionId,
-            isFromSession: false
-          };
+            isFromSession: false,
+            hasFullContent: true
+        };
 
-          // Record in unified session
-          await recordInUnifiedSession('DOCUMENT_UPLOAD', {
+        // ✅ CRITICAL: Record with full content in session
+        await recordInUnifiedSession('DOCUMENT_UPLOAD', {
             documentId: fileData.id,
             fileName: file.name,
             fileType: file.type,
             fileSize: file.size,
-            textContent: text,
-          });
+            textContent: text, // ✅ Store full content
+            contentLength: text.length
+        });
 
-          // Add message to unified session
-          const uploadMessage = {
-            id: Date.now() + index,
-            type: 'ai',
-            content: `📁 **Document Added**: ${file.name}\n\nFile added to unified session and ready for analysis.`,
-            timestamp: new Date()
-          };
-          setCurrentSessionMessages(prev => [...prev, uploadMessage]);
+        return fileData;
+    })
+);
 
-          return fileData;
-        })
-      );
 
       if (appendToExisting) {
         setUploadedFiles(prevFiles => [...prevFiles, ...processedNewFiles]);
@@ -355,14 +370,16 @@ const Dashboard = ({ user, onLogout }) => {
   };
 
   // Search within unified session files
-  const handleSearch = (term) => {
+// ✅ ENHANCED: Search that works with restored sessions
+const handleSearch = (term) => {
     if (!term || typeof term !== 'string' || !term.trim()) {
-      setError('Please enter a valid search term');
-      return;
+        setError('Please enter a valid search term');
+        return;
     }
+
     if (uploadedFiles.length === 0) {
-      setError('Please upload files first');
-      return;
+        setError('Please upload files first');
+        return;
     }
 
     setSearchTerm(term);
@@ -370,60 +387,96 @@ const Dashboard = ({ user, onLogout }) => {
     setIsLoading(true);
 
     try {
-      const results = uploadedFiles
-        .filter(file => file.sessionId === currentSessionId)
-        .map(fileData => {
-          const fileText = typeof fileData.text === 'string' ? fileData.text : String(fileData.text || '');
-          if (fileText.length < 50) {
-      console.warn(`⚠️ File ${fileData.name} has insufficient content`);
-      return null; // Filter out later
-    }
-          const sentences = fileText
-            .split(/[.!?]+/)
-            .filter(s => typeof s === 'string' && s.trim().length > 0)
-            .map(s => s.trim());
+        const results = uploadedFiles
+            .filter(file => file.sessionId === currentSessionId)
+            .map(fileData => {
+                let fileText = fileData.text || '';
+                
+                // ✅ Handle restored sessions with limited content
+                if (fileText.length < 100 && !fileData.hasFullContent) {
+                    console.warn(`⚠️ Limited content for restored file ${fileData.name}`);
+                    return {
+                        fileId: fileData.id,
+                        fileName: fileData.name || 'Unknown file',
+                        fileSize: fileData.size || 0,
+                        sentences: [{
+                            id: 0,
+                            number: 1,
+                            text: `Document "${fileData.name}" was restored from a previous session. For full search capability, please re-upload the original file.`,
+                            originalIndex: 0
+                        }],
+                        totalMatches: 1,
+                        totalOccurrences: 1,
+                        isLimitedContent: true
+                    };
+                }
 
-          const matchingSentences = [];
-          let occurrenceCount = 0;
+                // ✅ Normal search for files with full content
+                const sentences = fileText
+                    .split(/[.!?]+/)
+                    .filter(s => typeof s === 'string' && s.trim().length > 0)
+                    .map(s => s.trim());
 
-          sentences.forEach((sentence, index) => {
-            if (typeof sentence === 'string' && sentence.toLowerCase().includes(term.toLowerCase())) {
-              occurrenceCount++;
-              matchingSentences.push({
-                id: index,
-                number: occurrenceCount,
-                text: sentence,
-                originalIndex: index
-              });
-            }
-          });
+                const matchingSentences = [];
+                let occurrenceCount = 0;
 
-          const regex = new RegExp(`\\b${term}\\b`, 'gi');
-          const totalOccurrences = (fileText.match(regex) || []).length;
+                sentences.forEach((sentence, index) => {
+                    if (typeof sentence === 'string' && sentence.toLowerCase().includes(term.toLowerCase())) {
+                        occurrenceCount++;
+                        matchingSentences.push({
+                            id: index,
+                            number: occurrenceCount,
+                            text: sentence,
+                            originalIndex: index
+                        });
+                    }
+                });
 
-          return {
-            fileId: fileData.id,
-            fileName: fileData.name || 'Unknown file',
-            fileSize: fileData.size || 0,
-            sentences: matchingSentences,
-            totalMatches: matchingSentences.length,
-            totalOccurrences: totalOccurrences
-          };
-        }).filter(result => result !== null && result.totalOccurrences > 0);
+                const regex = new RegExp(`\\b${term}\\b`, 'gi');
+                const totalOccurrences = (fileText.match(regex) || []).length;
 
-      setSearchResults(results);
-      const totalResults = results.reduce((sum, result) => sum + result.totalOccurrences, 0);
-      
-      recordSearchInUnifiedSession(term, totalResults);
+                return {
+                    fileId: fileData.id,
+                    fileName: fileData.name || 'Unknown file',
+                    fileSize: fileData.size || 0,
+                    sentences: matchingSentences,
+                    totalMatches: matchingSentences.length,
+                    totalOccurrences: totalOccurrences,
+                    hasFullContent: fileData.hasFullContent
+                };
+            })
+            .filter(result => result.totalOccurrences > 0);
 
-      console.log(`🔍 Search completed in unified session ${currentSessionId}:`, totalResults, 'results');
+        setSearchResults(results);
+        const totalResults = results.reduce((sum, result) => sum + result.totalOccurrences, 0);
+        
+        // ✅ Enhanced search message
+        const limitedResults = results.filter(r => r.isLimitedContent);
+        recordSearchInUnifiedSession(term, totalResults);
+        
+        if (limitedResults.length > 0) {
+            const searchMessage = {
+                id: Date.now(),
+                type: 'ai',
+                content: `🔍 **Search Results**: "${term}" - ${totalResults} matches found
+                
+⚠️ **${limitedResults.length} files** have limited content from session restoration
+✅ **${results.length - limitedResults.length} files** fully searchable
 
+**Tip**: Re-upload files for complete search functionality`,
+                timestamp: new Date()
+            };
+            setCurrentSessionMessages(prev => [...prev, searchMessage]);
+        }
+
+        console.log(`🔍 Search completed: ${totalResults} results`);
     } catch (err) {
-      setError('Error searching files: ' + err.message);
+        setError('Error searching files: ' + err.message);
     } finally {
-      setIsLoading(false);
+        setIsLoading(false);
     }
-  };
+};
+
 
   // Clear unified session
   const handleClear = () => {
@@ -448,118 +501,232 @@ const Dashboard = ({ user, onLogout }) => {
     console.log('🆕 Started new unified session');
   };
 
+  // ✅ NEW: Force AI backend to clear cache and context
+const clearAIBackendCache = async () => {
+    try {
+        await fetch(`${API_BASE_URL}/api/ai/clear-cache`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                userId: user?.userId,
+                action: 'session_switch',
+                timestamp: Date.now()
+            })
+        });
+        console.log('✅ AI backend cache cleared for fresh responses');
+    } catch (error) {
+        console.warn('⚠️ Could not clear AI backend cache:', error);
+    }
+};
+
+
   // Switch to different unified session
-  const handleSelectSession = async (session) => {
-  if (session.id === currentSessionId) {
-    setShowHistory(false);
-    closeMobileDrawer();
-    return;
-  }
-
-  setSessionLoading(true);
-  setError('');
-
-  try {
-    console.log('🔄 Switching to unified session:', session.id);
-    
-    const response = await fetch(`${API_BASE_URL}/api/history/session/${session.id}/restore`, {
-      method: 'POST'
-    });
-
-    if (!response.ok) {
-      if (response.status === 404) {
-        setError('Session no longer exists.');
-        setTimeout(() => {
-          setError('');
-          window.location.reload();
-        }, 3000);
+// Switch to different unified session
+const handleSelectSession = async (session) => {
+    if (session.id === currentSessionId) {
         setShowHistory(false);
+        closeMobileDrawer();
         return;
-      } else {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
     }
 
-    const data = await response.json();
+    setSessionLoading(true);
+    setError('');
     
-    if (data.success) {
-      const restoredSession = data.session;
-      
-      clearAllSessionData();
-      
-      setCurrentSessionId(restoredSession.id);
-      setCurrentDayKey(restoredSession.dayKey);
-      setCurrentSessionData(restoredSession);
-      
-      // Restore messages
-      // ✅ FIXED: Ensure messages persist properly
-if (restoredSession.messages && restoredSession.messages.length > 0) {
-  const validMessages = restoredSession.messages.filter(msg => 
-    msg && msg.content && msg.type
-  );
-  setCurrentSessionMessages(validMessages);
-  console.log(`✅ Restored ${validMessages.length} messages`);
+    // ✅ DEFINE restoreCompleteSessionHistory FIRST
+    const restoreCompleteSessionHistory = async (sessionId) => {
+        try {
+            console.log('🔄 Fetching complete session history for:', sessionId);
+            const response = await fetch(`${API_BASE_URL}/api/history/session/complete/${sessionId}`);
+            const data = await response.json();
+            console.log('📊 Complete session data received:', data);
+            
+            if (data.success) {
+                const allMessages = [];
+                
+                // ✅ Process chatMessages from API
+                if (data.chatMessages && data.chatMessages.length > 0) {
+                    data.chatMessages.forEach(msg => {
+                        allMessages.push({
+                            id: msg.id || `restored_${Date.now()}_${Math.random()}`,
+                            type: (msg.type || 'ai').toLowerCase(),
+                            content: msg.content || '',
+                            timestamp: new Date(msg.timestamp || Date.now()),
+                            source: msg.source || 'unknown',
+                            isRestored: true
+                        });
+                    });
+                }
+                
+                // ✅ Sort by timestamp
+                const sortedMessages = allMessages
+                    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+                    .filter(msg => msg.content && msg.content.trim().length > 0);
+                
+                console.log(`✅ Processed ${sortedMessages.length} complete messages for restoration`);
+                return sortedMessages;
+            } else {
+                console.error('❌ API returned error:', data.error);
+                return [];
+            }
+        } catch (error) {
+            console.error('❌ Error fetching complete session history:', error);
+            return [];
+        }
+    };
+
+    try {
+        console.log('🔄 Switching to unified session:', session.id);
+        const response = await fetch(`${API_BASE_URL}/api/history/session/${session.id}/restore`, {
+            method: 'POST'
+        });
+
+        if (!response.ok) {
+            if (response.status === 404) {
+                setError('Session no longer exists.');
+                setTimeout(() => {
+                    setError('');
+                    window.location.reload();
+                }, 3000);
+                setShowHistory(false);
+                return;
+            } else {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+        }
+
+        const data = await response.json();
+        if (data.success) {
+            const restoredSession = data.session;
+            clearAllSessionData();
+            setCurrentSessionId(restoredSession.id);
+            setCurrentDayKey(restoredSession.dayKey);
+            setCurrentSessionData(restoredSession);
+
+            // ✅ RESTORE DOCUMENTS FIRST
+            if (restoredSession.documentDetails && restoredSession.documentDetails.length > 0) {
+                const sessionFiles = await Promise.all(restoredSession.documentDetails.map(async (doc) => {
+                    let textContent = doc.textContent;
+                    
+                    // ✅ If no text content, try to get it from restoration data
+                    if (!textContent || textContent.trim().length < 50) {
+                        console.log(`⚠️ Missing content for ${doc.fileName}, checking restoration data`);
+                        if (restoredSession.restorationData && restoredSession.restorationData.documentRestorationData) {
+                            const restorationDoc = restoredSession.restorationData.documentRestorationData[doc.documentId];
+                            if (restorationDoc && restorationDoc.textContent) {
+                                textContent = restorationDoc.textContent;
+                                console.log(`✅ Found content in restoration data for ${doc.fileName}`);
+                            }
+                        }
+                    }
+                    
+                    // ✅ Final fallback - create meaningful placeholder
+                    if (!textContent || textContent.trim().length < 50) {
+                        textContent = `RESTORED DOCUMENT: ${doc.fileName}
+UPLOAD DATE: ${doc.uploadTime}
+FILE TYPE: ${doc.fileType}
+ORIGINAL SIZE: ${doc.fileSize} bytes
+STATUS: Document restored from session
+
+This document was previously uploaded and is stored in your session.
+For full search and AI functionality, please re-upload the original file.
+
+SEARCH: Limited functionality available
+AI CHAT: Please re-upload for full AI analysis
+SESSION ID: ${restoredSession.id}`;
+                    }
+
+                    return {
+                        id: doc.documentId,
+                        name: doc.fileName,
+                        type: doc.fileType || 'application/pdf',
+                        size: doc.fileSize || 0,
+                        text: textContent,
+                        uploadTime: new Date(doc.uploadTime),
+                        sessionId: restoredSession.id,
+                        isFromSession: true,
+                        contentLength: textContent.length,
+                        hasFullContent: doc.textContent && doc.textContent.length > 100
+                    };
+                }));
+                
+                setUploadedFiles(sessionFiles);
+                console.log(`✅ Restored ${sessionFiles.length} documents with content`);
+                
+                // ✅ Re-upload documents to AI backend
+                reuploadSessionDocumentsToAI(sessionFiles);
+                
+                // ✅ Enhanced restoration message
+                const restorationMessage = {
+                    id: `restoration_${Date.now()}`,
+                    type: 'ai',
+                    content: `✅ **Fresh Session Restored for ${user?.username}!**
+
+📁 **Documents**: ${sessionFiles.length} files loaded
+🔍 **Search**: ${sessionFiles.filter(f => f.hasFullContent).length}/${sessionFiles.length} files ready
+💬 **AI Chat**: Ready for question!
+
+${sessionFiles.filter(f => !f.hasFullContent).length > 0 ? 
+`⚠️ **${sessionFiles.filter(f => !f.hasFullContent).length} files need re-upload** for full functionality` : 
+'🎯 **All files ready for full functionality!**'}`,
+                    timestamp: new Date()
+                };
+                setCurrentSessionMessages([ restorationMessage]);
+
+                await clearAIBackendCache();
+
+                reuploadSessionDocumentsToAI(sessionFiles);
+            }
+
+            // ✅ RESTORE MESSAGES SECOND (only one declaration)
+            // ✅ RESTORE MESSAGES SECOND (replace, don't append)
+const completeMessages = await restoreCompleteSessionHistory(restoredSession.id);
+if (completeMessages.length > 0) {
+    setCurrentSessionMessages(completeMessages); // ✅ REPLACE instead of append
+    console.log(`✅ Restored complete chat history: ${completeMessages.length} messages`);
+} else if (restoredSession.messages && restoredSession.messages.length > 0) {
+    // ✅ Final fallback to session messages
+    const fallbackMessages = restoredSession.messages
+        .filter(msg => msg && msg.content && msg.content.trim())
+        .map(msg => ({
+            id: msg.id || `fallback_${Date.now()}_${Math.random()}`,
+            type: (msg.type || 'ai').toLowerCase(),
+            content: msg.content,
+            timestamp: new Date(msg.timestamp || Date.now()),
+            isRestored: true
+        }));
+    
+    setCurrentSessionMessages(fallbackMessages); // ✅ REPLACE instead of append
+    console.log(`✅ Fallback messages restored: ${fallbackMessages.length} messages`);
 }
 
-      
-      // In handleSelectSession, replace the document restoration part:
-if (restoredSession.documentDetails && restoredSession.documentDetails.length > 0) {
-  const sessionFiles = restoredSession.documentDetails.map((doc) => ({
-    id: doc.documentId,
-    name: doc.fileName,
-    type: doc.fileType || 'application/pdf',
-    size: doc.fileSize || 0,
-    text: doc.textContent || `[Document from session - ${doc.fileName}]`, // ✅ USE textContent
-    uploadTime: new Date(doc.uploadTime),
-    sessionId: restoredSession.id,
-    isFromSession: true,
-    contentLength: doc.textContent ? doc.textContent.length : 0
-  }));
 
-  setUploadedFiles(sessionFiles);
-    // ✅ ADD RESTORATION MESSAGE
-  const restorationMessage = {
-    id: Date.now(),
-    type: 'ai',
-    content: `✅ **Session Restored!** Loaded ${sessionFiles.length} documents with full content preservation.`,
-    timestamp: new Date()
-  };
-  setCurrentSessionMessages(prev => [...prev, restorationMessage]);
-        
-        // ✅ RE-UPLOAD DOCUMENTS TO AI BACKEND
-        setTimeout(() => {
-          reuploadSessionDocumentsToAI(sessionFiles);
-        }, 1000);
-      }
-      
-      // Restore last search
-      if (restoredSession.searchQueries && restoredSession.searchQueries.length > 0) {
-        const lastSearch = restoredSession.searchQueries[restoredSession.searchQueries.length - 1];
-        setSearchTerm(lastSearch.query);
-        
-        setTimeout(() => {
-    if (uploadedFiles.length > 0) {
-      console.log('🔍 Restoring search:', lastSearch.query);
-      handleSearch(lastSearch.query);
+            // Restore last search
+            if (restoredSession.searchQueries && restoredSession.searchQueries.length > 0) {
+                const lastSearch = restoredSession.searchQueries[restoredSession.searchQueries.length - 1];
+                setSearchTerm(lastSearch.query);
+                setTimeout(() => {
+                    if (uploadedFiles.length > 0) {
+                        console.log('🔍 Restoring search:', lastSearch.query);
+                        handleSearch(lastSearch.query);
+                    }
+                }, 3000);
+            }
+
+            setShowHistory(false);
+            closeMobileDrawer();
+            console.log('✅ Unified session switched successfully:', session.id);
+        } else {
+            setError(data.error || 'Failed to restore session');
+        }
+    } catch (error) {
+        console.error('Error loading session:', error);
+        setError('Error loading session: ' + error.message);
+        setShowHistory(false);
+    } finally {
+        setSessionLoading(false);
     }
-  },3000);
-      }
-      
-      setShowHistory(false);
-      closeMobileDrawer();
-      
-      console.log('✅ Unified session switched successfully:', session.id);
-    } else {
-      setError(data.error || 'Failed to restore session');
-    }
-  } catch (error) {
-    console.error('Error loading session:', error);
-    setError('Error loading session: ' + error.message);
-    setShowHistory(false);
-  } finally {
-    setSessionLoading(false);
-  }
 };
+
 const sanitizeContentForUpload = (content, fileName) => {
   if (!content || typeof content !== 'string') {
     return `[Document: ${fileName}]\nRestored from session\nContent available for search but limited for AI analysis.`;
@@ -660,7 +827,12 @@ const reuploadSessionDocumentsToAI = async (sessionFiles) => {
         // ✅ Upload to AI backend using /api/ai/upload (same endpoint that works on first login)
         const uploadResponse = await fetch(`${API_BASE_URL}/api/ai/upload`, {
           method: 'POST',
-          body: formData
+          body: formData,
+          headers: {
+            'X-Session-ID': fileData.sessionId,
+            'X-Session-Switch': 'true',
+            'X-Timestamp': Date.now().toString()
+          }
         });
 
         if (uploadResponse.ok) {
@@ -932,17 +1104,17 @@ const reuploadSessionDocumentsToAI = async (sessionFiles) => {
               )}
             </div>
             
-            <AIChat
-              key={currentSessionId} // Forces reset on session change
-              uploadedFiles={uploadedFiles}
-              user={user}
-              onRecordMessage={recordChatMessage}
-              initialMessages={currentSessionMessages} // Pass initial messages
-              isSessionLoading={sessionLoading}
-              currentSessionId={currentSessionId} // ✅ ADD this line
-              onReuploadDocuments={reuploadSessionDocumentsToAI}
-              setCurrentSessionMessages={setCurrentSessionMessages}
-            />
+            {currentSessionId && (
+                <AIChat
+                    key={currentSessionId} // ✅ Force remount on session change
+                    uploadedFiles={uploadedFiles}
+                    user={user}
+                    onRecordMessage={recordChatMessage}
+                    initialMessages={currentSessionMessages}
+                    isSessionLoading={sessionLoading}
+                />
+              )}
+
           </section>
         </div>
       </main>
