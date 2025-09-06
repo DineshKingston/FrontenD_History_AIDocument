@@ -366,8 +366,6 @@ const deduplicateMessages = useCallback((messages) => {
     });
 }, []);
 
-
-
 // ✅ ENHANCED: Sanitized AI query with better error handling
 const tryAIQuery = useCallback(async (question) => {
     if (!question.trim()) return;
