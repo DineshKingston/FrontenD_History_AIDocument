@@ -836,8 +836,6 @@ END OF DOCUMENT
 };
 
 
-
-
 const reuploadSessionDocumentsToAI = async (sessionFiles) => {
     if (!sessionFiles || sessionFiles.length === 0) {
         console.log('⚠️ No documents to re-upload to AI backend');
@@ -846,12 +844,26 @@ const reuploadSessionDocumentsToAI = async (sessionFiles) => {
 
     console.log('🔄 Re-uploading documents to AI backend for session continuity');
     
+    // ✅ Clear AI backend first
+    try {
+        await fetch(`${API_BASE_URL}/api/ai/documents`, { method: 'DELETE' });
+        console.log('✅ Cleared AI backend before restoration');
+    } catch (error) {
+        console.warn('⚠️ Could not clear AI backend:', error);
+    }
+
     let successCount = 0;
     const failedFiles = [];
+    const processedFiles = new Set();
 
     for (const fileData of sessionFiles) {
+        if (processedFiles.has(fileData.name)) {
+            console.log(`⚠️ Skipping duplicate: ${fileData.name}`);
+            continue;
+        }
+        
         if (!fileData.text || fileData.text.length < 50) {
-            console.log(`⚠️ Skipping ${fileData.name} - insufficient content for AI processing`);
+            console.log(`⚠️ Skipping ${fileData.name} - insufficient content`);
             failedFiles.push({ name: fileData.name, error: 'Insufficient content' });
             continue;
         }
@@ -859,10 +871,17 @@ const reuploadSessionDocumentsToAI = async (sessionFiles) => {
         try {
             console.log(`📤 Re-uploading ${fileData.name} (${fileData.text.length} chars)`);
             
-            // Create a blob from the text content
-            const blob = new Blob([fileData.text], { type: 'text/plain' });
+            // ✅ CRITICAL FIX: Always send as plain text for restored content
+            const sanitizedContent = sanitizeRestoredContent(fileData.text, fileData.name);
+            
+            // ✅ Force text/plain for all restored content
+            const blob = new Blob([sanitizedContent], { type: 'text/plain' });
+            
+            // ✅ Use .txt extension to ensure proper handling
+            const textFileName = fileData.name.replace(/\.(pdf|docx|doc)$/i, '.txt');
+            
             const formData = new FormData();
-            formData.append('file', blob, fileData.name);
+            formData.append('file', blob, textFileName);
 
             const response = await fetch(`${API_BASE_URL}/api/ai/upload`, {
                 method: 'POST',
@@ -871,9 +890,11 @@ const reuploadSessionDocumentsToAI = async (sessionFiles) => {
 
             if (response.ok) {
                 successCount++;
-                console.log(`✅ Successfully re-uploaded ${fileData.name}: ${response.status}`);
+                processedFiles.add(fileData.name);
+                console.log(`✅ Successfully re-uploaded ${fileData.name} as ${textFileName}: ${response.status}`);
             } else {
-                console.log(`❌ Error processing ${fileData.name}:`, response.status);
+                const errorText = await response.text();
+                console.log(`❌ Error processing ${fileData.name}:`, response.status, errorText);
                 failedFiles.push({ name: fileData.name, error: `HTTP ${response.status}` });
             }
         } catch (error) {
@@ -881,11 +902,9 @@ const reuploadSessionDocumentsToAI = async (sessionFiles) => {
             failedFiles.push({ name: fileData.name, error: error.message });
         }
 
-        // Small delay between uploads
         await new Promise(resolve => setTimeout(resolve, 500));
     }
 
-    // ✅ Status message with results
     const statusMessage = {
         id: Date.now() + 1,
         type: 'ai',
@@ -897,7 +916,26 @@ const reuploadSessionDocumentsToAI = async (sessionFiles) => {
     return successCount > 0;
 };
 
-
+// ✅ Content sanitization function
+const sanitizeRestoredContent = (content, originalFileName) => {
+    if (!content || typeof content !== 'string') {
+        return `Document: ${originalFileName}\nContent not available for AI analysis.`;
+    }
+    
+    // ✅ Clean up any formatting artifacts from storage
+    let sanitized = content
+        // Remove session artifacts
+        .replace(/^DOCUMENT: .*\nUPLOADED: .*\nSTATUS: .*$/gm, '')
+        .replace(/^=== DOCUMENT \d+: .*\n.*\n.*\n.*\n.*\n\n/gm, '')
+        .replace(/\n=== END OF DOCUMENT \d+ ===\n*$/gm, '')
+        // Clean up excessive whitespace
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+    
+    // ✅ Add document identifier for AI context
+    const header = `[RESTORED DOCUMENT: ${originalFileName}]\n\n`;
+    return header + sanitized;
+};
 
 
   const toggleDarkMode = () => setIsDarkMode(prev => !prev);

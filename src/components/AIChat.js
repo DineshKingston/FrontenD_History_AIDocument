@@ -137,127 +137,190 @@ useEffect(() => {
         }
     }, [isSessionLoading]);
 
-  // Upload files with personalization
-  useEffect(() => {
-    const uploadAllFilesToBackend = async () => {
-      const regularFiles = uploadedFiles.filter(f => !f.isFromSession);
-      const restoredFiles = uploadedFiles.filter(f => f.isFromSession);
+// Upload files with personalization
+useEffect(() => {
+  const uploadAllFilesToBackend = async () => {
+    const regularFiles = uploadedFiles.filter(f => !f.isFromSession);
+    const restoredFiles = uploadedFiles.filter(f => f.isFromSession);
 
-      // ✅ ADD: Handle restored files
-        if (restoredFiles.length > 0 && isInitialized) {
-            console.log(`🔄 Processing ${restoredFiles.length} restored files for AI backend`);
-            for (const fileData of restoredFiles) {
-                if (fileData.text && fileData.text.length > 100) {
-                    try {
-                        const blob = new Blob([fileData.text], { type: 'text/plain' });
-                        const file = new File([blob], fileData.name, { type: 'text/plain' });
-                        const formData = new FormData();
-                        formData.append('file', file);
-                        
-                        await fetch(`${API_BASE_URL}/api/ai/upload`, {
-                            method: 'POST',
-                            body: formData
-                        });
-                        
-                        console.log(`✅ Re-uploaded restored file: ${fileData.name}`);
-                    } catch (error) {
-                        console.warn(`Failed to re-upload ${fileData.name}:`, error);
-                    }
-                }
-            }
-            setFilesUploaded(true);
-        }
+    // ✅ ENHANCED: Handle restored files with proper formatting
+    if (restoredFiles.length > 0 && isInitialized) {
+      console.log(`🔄 Processing ${restoredFiles.length} restored files for AI backend`);
+      let restoredCount = 0;
+      const restoredFailures = [];
       
-      if (regularFiles.length > 0 && !filesUploaded && !isSessionLoading && isInitialized) {
-        try {
-          setUploadStatus('Uploading all files to backend...');
-          console.log(`Starting upload of ${regularFiles.length} files to backend...`);
-
-          const formData = new FormData();
-          regularFiles.forEach((fileObj, index) => {
-            if (fileObj.file) {
-              console.log(`Adding file ${index + 1}: ${fileObj.name} (${fileObj.file.size} bytes)`);
-              formData.append('files', fileObj.file);
-            }
-          });
-
-          const response = await fetch(`${API_BASE_URL}/api/ai/upload/multiple`, {
-            method: 'POST',
-            body: formData
-          });
-
-          if (response.ok) {
-            const data = await response.json();
-            console.log('Upload response:', data);
-            setFilesUploaded(true);
-            setUploadStatus('');
-
-            let uploadMessage = `✅ **Multi-File Upload Complete for ${user?.username}!**\n\n`;
-            uploadMessage += `📄 **Successfully processed: ${data.successCount} files**\n`;
+      for (const fileData of restoredFiles) {
+        if (fileData.text && fileData.text.length > 50) {
+          try {
+            // ✅ CRITICAL FIX: Sanitize content and use .txt extension
+            const sanitizedContent = sanitizeRestoredContent(fileData.text, fileData.name);
+            const textFileName = fileData.name.replace(/\.(pdf|docx|doc)$/i, '.txt');
             
-            if (data.successFiles && data.successFiles.length > 0) {
-              uploadMessage += `• ${data.successFiles.join('\n• ')}\n\n`;
-            }
+            const blob = new Blob([sanitizedContent], { type: 'text/plain' });
+            const file = new File([blob], textFileName, { type: 'text/plain' });
+            const formData = new FormData();
+            formData.append('file', file);
             
-            if (data.failCount > 0) {
-              uploadMessage += `❌ **Failed: ${data.failCount} files**\n`;
-              if (data.failedFiles && data.failedFiles.length > 0) {
-                uploadMessage += `• ${data.failedFiles.join('\n• ')}\n\n`;
-              }
-            }
+            const response = await fetch(`${API_BASE_URL}/api/ai/upload`, {
+              method: 'POST',
+              body: formData
+            });
             
-            uploadMessage += `🎯 **Total documents ready for ${user?.username}: ${data.totalDocuments}**\n\n`;
-            uploadMessage += `You can now ask questions that span across ALL your documents!`;
-
-            const uploadResultMessage = {
-              id: Date.now(),
-              type: 'ai',
-              content: uploadMessage,
-              timestamp: new Date()
-            };
-
-            setMessages(prev => [...prev, uploadResultMessage]);
-
-            if (onRecordMessage) {
-              onRecordMessage('SYSTEM', 'Files uploaded to AI backend', JSON.stringify({
-                action: 'backend_upload',
-                filesCount: data.successCount,
-                totalDocuments: data.totalDocuments
-              }));
+            if (response.ok) {
+              restoredCount++;
+              console.log(`✅ Re-uploaded restored file: ${fileData.name} as ${textFileName}`);
+            } else {
+              const errorData = await response.text();
+              console.warn(`❌ Failed to upload ${fileData.name}:`, response.status, errorData);
+              restoredFailures.push(fileData.name);
             }
-          } else {
-            console.error('Failed to upload files to backend:', response.status);
-            setUploadStatus('Upload failed');
-            
-            const errorMessage = {
-              id: Date.now(),
-              type: 'ai',
-              content: `❌ Failed to upload files to backend for ${user?.username}. Please check the server and try again.`,
-              timestamp: new Date()
-            };
-            setMessages(prev => [...prev, errorMessage]);
+          } catch (error) {
+            console.warn(`❌ Failed to re-upload ${fileData.name}:`, error);
+            restoredFailures.push(fileData.name);
           }
-        } catch (error) {
-          console.error('Error uploading files:', error);
-          setUploadStatus('Upload error');
+        } else {
+          console.warn(`⚠️ Skipping ${fileData.name} - insufficient content (${fileData.text?.length || 0} chars)`);
+        }
+      }
+      
+      // ✅ Add status message for restored files
+      const restorationMessage = {
+        id: Date.now(),
+        type: 'ai',
+        content: `🔄 **Session Restoration Complete for ${user?.username}!**\n\n` +
+                `📄 **Documents restored**: ${restoredCount}/${restoredFiles.length}\n` +
+                (restoredFailures.length > 0 ? `❌ **Failed**: ${restoredFailures.join(', ')}\n\n` : '\n') +
+                `💬 **AI Chat**: ${restoredCount > 0 ? 'Ready for questions!' : 'Some documents may need re-upload'}\n\n` +
+                `Your previous session is now active!`,
+        timestamp: new Date()
+      };
+      
+      setMessages(prev => [...prev, restorationMessage]);
+      setFilesUploaded(true);
+    }
+    
+    // ✅ Handle regular files (unchanged logic)
+    if (regularFiles.length > 0 && !filesUploaded && !isSessionLoading && isInitialized) {
+      try {
+        setUploadStatus('Uploading all files to backend...');
+        console.log(`Starting upload of ${regularFiles.length} files to backend...`);
+
+        const formData = new FormData();
+        regularFiles.forEach((fileObj, index) => {
+          if (fileObj.file) {
+            console.log(`Adding file ${index + 1}: ${fileObj.name} (${fileObj.file.size} bytes)`);
+            formData.append('files', fileObj.file);
+          }
+        });
+
+        const response = await fetch(`${API_BASE_URL}/api/ai/upload/multiple`, {
+          method: 'POST',
+          body: formData
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          console.log('Upload response:', data);
+          setFilesUploaded(true);
+          setUploadStatus('');
+
+          let uploadMessage = `✅ **Multi-File Upload Complete for ${user?.username}!**\n\n`;
+          uploadMessage += `📄 **Successfully processed: ${data.successCount} files**\n`;
+          
+          if (data.successFiles && data.successFiles.length > 0) {
+            uploadMessage += `• ${data.successFiles.join('\n• ')}\n\n`;
+          }
+          
+          if (data.failCount > 0) {
+            uploadMessage += `❌ **Failed: ${data.failCount} files**\n`;
+            if (data.failedFiles && data.failedFiles.length > 0) {
+              uploadMessage += `• ${data.failedFiles.join('\n• ')}\n\n`;
+            }
+          }
+          
+          uploadMessage += `🎯 **Total documents ready for ${user?.username}: ${data.totalDocuments}**\n\n`;
+          uploadMessage += `You can now ask questions that span across ALL your documents!`;
+
+          const uploadResultMessage = {
+            id: Date.now(),
+            type: 'ai',
+            content: uploadMessage,
+            timestamp: new Date()
+          };
+
+          setMessages(prev => [...prev, uploadResultMessage]);
+
+          if (onRecordMessage) {
+            onRecordMessage('SYSTEM', 'Files uploaded to AI backend', JSON.stringify({
+              action: 'backend_upload',
+              filesCount: data.successCount,
+              totalDocuments: data.totalDocuments
+            }));
+          }
+        } else {
+          console.error('Failed to upload files to backend:', response.status);
+          setUploadStatus('Upload failed');
           
           const errorMessage = {
             id: Date.now(),
             type: 'ai',
-            content: `❌ Error uploading files for ${user?.username}: ${error.message}. Please check if the backend server is running.`,
+            content: `❌ Failed to upload files to backend for ${user?.username}. Please check the server and try again.`,
             timestamp: new Date()
           };
           setMessages(prev => [...prev, errorMessage]);
         }
-      } else if (uploadedFiles.length > 0 && !isSessionLoading) {
-        setFilesUploaded(true);
+      } catch (error) {
+        console.error('Error uploading files:', error);
+        setUploadStatus('Upload error');
+        
+        const errorMessage = {
+          id: Date.now(),
+          type: 'ai',
+          content: `❌ Error uploading files for ${user?.username}: ${error.message}. Please check if the backend server is running.`,
+          timestamp: new Date()
+        };
+        setMessages(prev => [...prev, errorMessage]);
       }
-    };
-
-    if (isInitialized) {
-      uploadAllFilesToBackend();
+    } else if (uploadedFiles.length > 0 && !isSessionLoading) {
+      setFilesUploaded(true);
     }
-  }, [uploadedFiles, filesUploaded, isSessionLoading, onRecordMessage, isInitialized, user?.username]);
+  };
+
+  if (isInitialized) {
+    uploadAllFilesToBackend();
+  }
+}, [uploadedFiles, filesUploaded, isSessionLoading, onRecordMessage, isInitialized, user?.username]);
+
+// ✅ ADD: Content sanitization helper function
+const sanitizeRestoredContent = (content, originalFileName) => {
+  if (!content || typeof content !== 'string') {
+    return `[RESTORED DOCUMENT: ${originalFileName}]\nContent not available for analysis.`;
+  }
+  
+  // ✅ Clean up storage artifacts and formatting
+  let sanitized = content
+    // Remove session metadata that confuses AI
+    .replace(/^DOCUMENT: .*\nUPLOADED: .*\nSTATUS: .*\nFILE SIZE: .*\nCONTENT LENGTH: .*\n=== DOCUMENT CONTENT ===\n/gm, '')
+    .replace(/\n=== END DOCUMENT CONTENT ===\n.*$/gms, '')
+    .replace(/^=== DOCUMENT \d+: .*\n.*\n.*\n.*\n.*\n\n/gm, '')
+    .replace(/\n=== END OF DOCUMENT \d+ ===\n*$/gm, '')
+    .replace(/^PROCESSING NOTES:.*$/gm, '')
+    .replace(/^This document has been.*$/gm, '')
+    .replace(/^Document is ready.*$/gm, '')
+    // Clean excessive whitespace
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  
+  // ✅ Add clear restoration marker for AI context
+  const header = `[RESTORED FROM SESSION: ${originalFileName}]\n[ORIGINAL FORMAT: ${getFileExtension(originalFileName)}]\n[EXTRACTED TEXT CONTENT]\n\n`;
+  
+  return header + sanitized;
+};
+
+// ✅ Helper function for file extensions
+const getFileExtension = (filename) => {
+  return filename.split('.').pop()?.toUpperCase() || 'UNKNOWN';
+};
   
 
   // Better suggested questions
