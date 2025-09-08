@@ -92,7 +92,7 @@ useEffect(() => {
                 };
             }).filter(msg => msg.content && msg.content.trim().length > 0);
 
-            console.log(`Setting ${restoredMessages.length} New messages:`, restoredMessages);
+            // console.log(`Setting ${restoredMessages.length} New messages:`, restoredMessages);
             
             // ✅ FIX: Combine messages instead of appending later
             const confirmationMessage = {
@@ -106,7 +106,7 @@ useEffect(() => {
             // ✅ Set all messages at once - no setTimeout needed
             const allMessages = [...restoredMessages, confirmationMessage];
             const uniqueMessages = deduplicateMessages(allMessages);
-            console.log(`Setting ${uniqueMessages.length} unique messages:`, uniqueMessages);
+            // console.log(`Setting ${uniqueMessages.length} unique messages:`, uniqueMessages);
             setMessages(uniqueMessages);
             setFilesUploaded(true);
             

@@ -56,12 +56,11 @@ const Dashboard = ({ user, onLogout }) => {
       document.body.classList.remove('drawer-open');
     };
   }, [mobileDrawerOpen]);
-
-  // FIXED: Create ONE unified session for ALL activities
-  const initializeUnifiedSession = async () => {
+// ✅ FIXED: useEffect with proper dependencies
+const initializeUnifiedSession = useCallback(async () => {
   setSessionLoading(true);
   setError('');
-
+  
   try {
     console.log('🆕 Creating ONE unified session for user:', user.userId);
     const response = await fetch(`${API_BASE_URL}/api/history/session/new`, {
@@ -76,22 +75,19 @@ const Dashboard = ({ user, onLogout }) => {
 
     if (response.ok) {
       const data = await response.json();
-      
       setCurrentSessionId(data.sessionId || data.session?.id);
       setCurrentSessionData(data.session);
       setCurrentDayKey(data.session?.dayKey);
-
       clearAllSessionData();
 
-      // ✅ PERSONALIZED WELCOME MESSAGE
       const welcomeMessage = {
         id: Date.now(),
         type: 'ai',
         content: `🎯 **Welcome back, ${user?.username || 'User'}!**\n\nYour unified work session has started:\n• 📁 All document uploads\n• 🔍 All search activities\n• 💬 All AI conversations\n\n**Everything in ONE session for ${user?.username}!**`,
         timestamp: new Date()
       };
+      
       setCurrentSessionMessages([welcomeMessage]);
-
       console.log('✅ Unified session created:', data.sessionId || data.session?.id);
     } else {
       throw new Error('Failed to create unified session');
@@ -102,8 +98,14 @@ const Dashboard = ({ user, onLogout }) => {
   } finally {
     setSessionLoading(false);
   }
-};
+}, [user?.userId, user?.username]); // ✅ Added dependencies
 
+// ✅ FIXED: useEffect with proper dependency
+useEffect(() => {
+  if (user?.userId) {
+    initializeUnifiedSession();
+  }
+}, [user?.userId, initializeUnifiedSession]);
 
   // Clear all session data
 const clearAllSessionData = () => {
@@ -623,176 +625,276 @@ const restoreCompleteSessionHistory = async (sessionId) => {
     }
 };
 
-
-  // Switch to different unified session
-// Switch to different unified session
-// ✅ COMPLETE: Enhanced handleSelectSession function in Dashboard.js
+// ✅ FIXED: Enhanced handleSelectSession function in Dashboard.js
 const handleSelectSession = async (session) => {
-    if (session.id === currentSessionId) {
+  if (session.id === currentSessionId) {
+    setShowHistory(false);
+    closeMobileDrawer();
+    return;
+  }
+
+  setSessionLoading(true);
+  setError('');
+
+  // ✅ FIX: Declare variables outside try block to avoid scope issues
+  let sessionFiles = [];
+  let lastSearchQuery = null;
+
+  try {
+    console.log('🔄 Switching to unified session:', session.id);
+    
+    // ✅ STEP 1: Clear AI backend cache to prevent stale responses
+    await clearAIBackendCache();
+    
+    // ✅ STEP 2: Complete state reset BEFORE restoration
+    clearAllSessionData();
+    
+    // ✅ STEP 3: Set session context IMMEDIATELY
+    setCurrentSessionId(session.id);
+    setCurrentSessionData(session);
+    setCurrentDayKey(session.dayKey);
+
+    console.log('✅ Session context set, starting restoration...');
+
+    // ✅ STEP 4: Restore session from backend
+    const response = await fetch(`${API_BASE_URL}/api/history/session/${session.id}/restore`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+
+    if (!response.ok) {
+      if (response.status === 404) {
+        setError('Session no longer exists.');
+        setTimeout(() => {
+          setError('');
+          window.location.reload();
+        }, 3000);
         setShowHistory(false);
-        closeMobileDrawer();
         return;
+      } else {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
     }
 
-    setSessionLoading(true);
-    setError('');
+    const data = await response.json();
+    if (data.success) {
+      const restoredSession = data.session;
 
-    try {
-        console.log('🔄 Switching to unified session:', session.id);
+      // ✅ STEP 5: Restore documents with content validation
+      if (restoredSession.documentDetails && restoredSession.documentDetails.length > 0) {
+        console.log(`🔄 Restoring ${restoredSession.documentDetails.length} documents...`);
+        
+        sessionFiles = await Promise.all(restoredSession.documentDetails.map(async (doc, index) => {
+          let documentText = '';
+          
+          if (doc.textContent && doc.textContent.length > 50) {
+            documentText = doc.textContent;
+            console.log(`✅ Found stored content for ${doc.fileName}: ${documentText.length} chars`);
+          } else {
+            documentText = `DOCUMENT: ${doc.fileName}\nUPLOADED: ${doc.uploadTime || new Date()}\nSTATUS: Restored from previous session\n\nThis document was restored from a previous session. For full search and AI analysis capabilities, please re-upload the original file.\n\nDocument ID: ${doc.documentId}\nFile Type: ${doc.fileType}\nOriginal Size: ${doc.fileSize || 0} bytes`;
+            console.log(`⚠️ Limited content for ${doc.fileName}, using placeholder`);
+          }
 
-        // ✅ STEP 1: Clear AI backend cache to prevent stale responses
-        await clearAIBackendCache();
+          return {
+            id: doc.documentId || `restored_${session.id}_${index}`,
+            file: null,
+            name: doc.fileName,
+            type: doc.fileType,
+            size: doc.fileSize || documentText.length,
+            text: documentText,
+            uploadTime: new Date(doc.uploadTime || Date.now()),
+            sessionId: session.id,
+            isFromSession: true,
+            hasFullContent: doc.textContent && doc.textContent.length > 50
+          };
+        }));
 
-        // ✅ STEP 2: Complete state reset BEFORE restoration
-        clearAllSessionData();
+        // ✅ CRITICAL: Set uploadedFiles IMMEDIATELY and WAIT for state update
+        setUploadedFiles(sessionFiles);
+        console.log(`✅ Restored ${sessionFiles.length} documents with content`);
+        
+        // Re-upload documents to AI backend
+        reuploadSessionDocumentsToAI(sessionFiles);
+      }
 
-        // ✅ STEP 3: Set session context IMMEDIATELY (critical for recording searches)
-        setCurrentSessionId(session.id);
-        setCurrentSessionData(session);
-        setCurrentDayKey(session.dayKey);
+      // ✅ STEP 6: Get last search query BEFORE restoring messages
+      if (restoredSession.searchQueries && restoredSession.searchQueries.length > 0) {
+        lastSearchQuery = restoredSession.searchQueries[restoredSession.searchQueries.length - 1];
+        console.log('🔍 Found last search query:', lastSearchQuery.query);
+        setSearchTerm(lastSearchQuery.query);
+      }
 
-        console.log('✅ Session context set, starting restoration...');
+      // ✅ STEP 7: Restore complete message history
+      const completeMessages = await restoreCompleteSessionHistory(session.id);
+      if (completeMessages.length > 0) {
+        setCurrentSessionMessages([]);
+        
+        const statusMessage = {
+          id: `restoration_status_${Date.now()}`,
+          type: 'ai',
+          content: `✅ **Session Restored Successfully!**\n\n📁 **Documents**: ${restoredSession.documentDetails?.length || 0} files loaded\n🔍 **Search**: Ready for new searches\n💬 **Chat**: ${completeMessages.length} messages restored\n\n**Your session is fully restored!**`,
+          timestamp: new Date(),
+          isRestored: false
+        };
 
-        // ✅ STEP 4: Restore session from backend
-        const response = await fetch(`${API_BASE_URL}/api/history/session/${session.id}/restore`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' }
+        const allMessages = [statusMessage, ...completeMessages];
+        
+        // ✅ FIX: Move deduplicateMessages inside try block
+        const deduplicateMessages = (messages) => {
+          const seen = new Set();
+          return messages.filter(msg => {
+            const key = `${msg.content}|${msg.timestamp}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+        };
+
+        const uniqueMessages = deduplicateMessages(allMessages);
+        console.log(`✅ Setting ${uniqueMessages.length} unique session messages`);
+        setCurrentSessionMessages(uniqueMessages);
+      }
+
+      console.log('✅ Unified session switched successfully:', session.id);
+    } else {
+      setError(data.error || 'Failed to restore session data');
+    }
+
+    setShowHistory(false);
+    closeMobileDrawer();
+
+  } catch (error) {
+    console.error('❌ Error in session restoration:', error);
+    setError('Error loading session: ' + error.message);
+    setShowHistory(false);
+    closeMobileDrawer();
+  } finally {
+    setSessionLoading(false);
+    
+    // ✅ FIXED: Now variables are in scope
+    if (sessionFiles.length > 0 && lastSearchQuery?.query) {
+      setTimeout(() => {
+        console.log('🔍 Executing restored search with loaded files:', lastSearchQuery.query);
+        console.log('📁 Available files for search:', sessionFiles.map(f => f.name));
+        setUploadedFiles(sessionFiles);
+        setTimeout(() => {
+          executeSearchWithFiles(lastSearchQuery.query, sessionFiles);
+        }, 500);
+      }, 2000);
+    }
+  }
+};
+// ✅ FIXED: executeSearchWithFiles function - ensure search results are displayed
+const executeSearchWithFiles = (searchTerm, files) => {
+  if (!searchTerm || !files || files.length === 0) {
+    console.warn('⚠️ Cannot execute search: missing term or files');
+    return;
+  }
+
+  console.log(`🔍 Executing search for "${searchTerm}" in ${files.length} files`);
+  setIsLoading(true);
+  setError('');
+
+  try {
+    const results = files
+      // .filter(file => file.sessionId === currentSessionId)
+      .map(fileData => {
+        let fileText = fileData.text || '';
+        
+        // Handle restored sessions with limited content
+        if (fileText.length < 100 && !fileData.hasFullContent) {
+          console.warn(`⚠️ Limited content for restored file ${fileData.name}`);
+          return {
+            fileId: fileData.id,
+            fileName: fileData.name || 'Unknown file',
+            fileSize: fileData.size || 0,
+            sentences: [{
+              id: 0,
+              number: 1,
+              text: `Document "${fileData.name}" was restored from a previous session. For full search capability, please re-upload the original file.`,
+              originalIndex: 0
+            }],
+            totalMatches: 1,
+            totalOccurrences: 1,
+            isLimitedContent: true
+          };
+        }
+
+        // Normal search for files with full content
+        const sentences = fileText
+          .split(/[.!?]+/)
+          .filter(s => typeof s === 'string' && s.trim().length > 0)
+          .map(s => s.trim());
+
+        const matchingSentences = [];
+        let occurrenceCount = 0;
+
+        sentences.forEach((sentence, index) => {
+          if (typeof sentence === 'string' && sentence.toLowerCase().includes(searchTerm.toLowerCase())) {
+            occurrenceCount++;
+            matchingSentences.push({
+              id: index,
+              number: occurrenceCount,
+              text: sentence,
+              originalIndex: index
+            });
+          }
         });
 
-        if (!response.ok) {
-            if (response.status === 404) {
-                setError('Session no longer exists.');
-                setTimeout(() => {
-                    setError('');
-                    window.location.reload();
-                }, 3000);
-                setShowHistory(false);
-                return;
-            } else {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
-        }
+        const regex = new RegExp(`\\b${searchTerm}\\b`, 'gi');
+        const totalOccurrences = (fileText.match(regex) || []).length;
 
-        const data = await response.json();
+        return {
+          fileId: fileData.id,
+          fileName: fileData.name || 'Unknown file',
+          fileSize: fileData.size || 0,
+          sentences: matchingSentences,
+          totalMatches: matchingSentences.length,
+          totalOccurrences: totalOccurrences,
+          hasFullContent: fileData.hasFullContent
+        };
+      })
+      .filter(result => result.totalOccurrences > 0);
 
-        if (data.success) {
-            const restoredSession = data.session;
+    // ✅ CRITICAL FIX: Set search results immediately and force re-render
+    setSearchResults(results);
+    
+    const totalResults = results.reduce((sum, result) => sum + result.totalOccurrences, 0);
+    console.log(`🔍 Search completed: ${totalResults} results found for "${searchTerm}"`);
+    console.log('📊 Search results:', results);
 
-            // ✅ STEP 5: Restore documents with content validation
-            if (restoredSession.documentDetails && restoredSession.documentDetails.length > 0) {
-                console.log(`🔄 Restoring ${restoredSession.documentDetails.length} documents...`);
+    // ✅ FORCE UI UPDATE: Add a small delay to ensure state is updated
+    setTimeout(() => {
+      setSearchResults(results); // Set again to ensure UI updates
+    }, 100);
 
-                const sessionFiles = await Promise.all(restoredSession.documentDetails.map(async (doc, index) => {
-                    let documentText = '';
-                    
-                    // Check if document has stored content
-                    if (doc.textContent && doc.textContent.length > 50) {
-                        documentText = doc.textContent;
-                        console.log(`✅ Found stored content for ${doc.fileName}: ${documentText.length} chars`);
-                    } else {
-                        // Create enhanced placeholder content
-                        documentText = `DOCUMENT: ${doc.fileName}\nUPLOADED: ${doc.uploadTime || new Date()}\nSTATUS: Restored from previous session\n\nThis document was restored from a previous session. For full search and AI analysis capabilities, please re-upload the original file.\n\nDocument ID: ${doc.documentId}\nFile Type: ${doc.fileType}\nOriginal Size: ${doc.fileSize || 0} bytes`;
-                        console.log(`⚠️ Limited content for ${doc.fileName}, using placeholder`);
-                    }
+    // Add search message to indicate results were restored
+    const searchMessage = {
+      id: `restored_search_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      type: 'ai',
+      content: `🔍 **Restored Search**: "${searchTerm}"\n\nFound ${totalResults} results in ${results.length} documents from your previous session.`,
+      timestamp: new Date()
+    };
+    
+    setCurrentSessionMessages(prev => [...prev, searchMessage]);
 
-                    return {
-                        id: doc.documentId || `restored_${session.id}_${index}`,
-                        file: null,
-                        name: doc.fileName,
-                        type: doc.fileType,
-                        size: doc.fileSize || documentText.length,
-                        text: documentText,
-                        uploadTime: new Date(doc.uploadTime || Date.now()),
-                        sessionId: session.id,
-                        isFromSession: true,
-                        hasFullContent: doc.textContent && doc.textContent.length > 50
-                    };
-                }));
-
-                setUploadedFiles(sessionFiles);
-                console.log(`✅ Restored ${sessionFiles.length} documents with content`);
-
-                // ✅ Re-upload documents to AI backend for fresh analysis
-                reuploadSessionDocumentsToAI(sessionFiles);
-            }
-
-            // ✅ STEP 6: Restore complete message history (avoiding duplicates)
-            const completeMessages = await restoreCompleteSessionHistory(session.id);
-
-            if (completeMessages.length > 0) {
-                // ✅ CRITICAL: Clear any existing messages first
-                setCurrentSessionMessages([]);
-
-                // ✅ Add restoration status message
-                const statusMessage = {
-                    id: `restoration_status_${Date.now()}`,
-                    type: 'ai',
-                    content: `✅ **Session Restored Successfully!**\n\n📁 **Documents**: ${restoredSession.documentDetails?.length || 0} files loaded\n🔍 **Search**: Ready for new searches\n💬 **Chat**: ${completeMessages.length} messages restored\n\n**Your session is fully restored!**`,
-                    timestamp: new Date(),
-                    isRestored: false
-                };
-
-                // ✅ Combine all messages and deduplicate
-                const allMessages = [statusMessage, ...completeMessages];
-                // Deduplicate messages by content and timestamp
-                const deduplicateMessages = (messages) => {
-                    const seen = new Set();
-                    return messages.filter(msg => {
-                        const key = `${msg.content}|${msg.timestamp}`;
-                        if (seen.has(key)) return false;
-                        seen.add(key);
-                        return true;
-                    });
-                };
-                const uniqueMessages = deduplicateMessages(allMessages);
-
-                console.log(`✅ Setting ${uniqueMessages.length} unique session messages (single call)`);
-                setCurrentSessionMessages(uniqueMessages);
-            }
-
-            // ✅ STEP 7: Restore last search with proper delay (prevents duplicate messages)
-            if (restoredSession.searchQueries && restoredSession.searchQueries.length > 0) {
-                const lastSearch = restoredSession.searchQueries[restoredSession.searchQueries.length - 1];
-                console.log('🔍 Found last search query:', lastSearch.query);
-                
-                setSearchTerm(lastSearch.query);
-
-                // ✅ DELAYED SEARCH: Wait for session to fully initialize
-                setTimeout(() => {
-                    if (uploadedFiles.length > 0 && lastSearch.query) {
-                        console.log('🔍 Executing restored search:', lastSearch.query);
-                        handleSearch(lastSearch.query);
-                    }
-                }, 2000); // 2-second delay ensures session is ready
-            }
-
-            console.log('✅ Unified session switched successfully:', session.id);
-        } else {
-            setError(data.error || 'Failed to restore session data');
-        }
-
-        setShowHistory(false);
-        closeMobileDrawer();
-
-    } catch (error) {
-        console.error('❌ Error in session restoration:', error);
-        setError('Error loading session: ' + error.message);
-        setShowHistory(false);
-        closeMobileDrawer();
-    } finally {
-        setSessionLoading(false);
-    }
+  } catch (err) {
+    console.error('❌ Search execution error:', err);
+    setError('Error searching files: ' + err.message);
+  } finally {
+    setIsLoading(false);
+  }
 };
 
-
-const sanitizeContentForUpload = (content, fileName) => {
+// ✅ FIXED: Sanitize content function with proper regex
+const sanitizeContentForUpload = useCallback((content, fileName) => {
   if (!content || typeof content !== 'string') {
     return `[Document: ${fileName}]\nRestored from session\nContent available for search but limited for AI analysis.`;
   }
-  
-  // ✅ AGGRESSIVE SANITIZATION for AI backend compatibility
+
+  // ✅ FIX: Replace control characters regex to avoid ESLint error
   let sanitized = content
-    // Remove all control characters and non-printable chars
+    // Remove control characters (use Unicode ranges instead of hex codes)
     .replace(/[\u0000-\u001F\u007F-\u009F]/g, '')
     // Remove BOM and other problematic Unicode
     .replace(/\uFEFF/g, '')
@@ -802,39 +904,29 @@ const sanitizeContentForUpload = (content, fileName) => {
     .replace(/\s+/g, ' ')
     .replace(/\n\s*\n\s*\n/g, '\n\n')
     .trim();
-  
-  // ✅ ENSURE VALID CONTENT STRUCTURE for Document AI
+
+  // Ensure valid content structure for Document AI
   if (sanitized.length > 32000) {
-    // Split into meaningful chunks rather than arbitrary truncation
     const firstPart = sanitized.substring(0, 15000);
     const lastPart = sanitized.substring(sanitized.length - 15000);
     sanitized = firstPart + '\n\n[... Content truncated for AI processing ...]\n\n' + lastPart;
   }
-  
-  // ✅ ENSURE MINIMUM CONTENT LENGTH
+
+  // Ensure minimum content length
   if (sanitized.length < 200) {
-    const paddedContent = `
-DOCUMENT: ${fileName}
-RESTORED: ${new Date().toLocaleString()}
-STATUS: Content preserved from session
-
-ORIGINAL CONTENT:
-${sanitized}
-
-PROCESSING NOTES:
-This document was successfully restored from a previous session. The content has been preserved and is fully searchable. For optimal AI analysis, consider re-uploading the original file.
-
-COMPATIBILITY PADDING:
-This additional text ensures the document meets minimum processing requirements for the AI backend while maintaining the integrity of your original content.
-
-END OF DOCUMENT
-`;
+    const paddedContent = ` 
+DOCUMENT: ${fileName} 
+RESTORED: ${new Date().toLocaleString()} 
+STATUS: Content preserved from session 
+ORIGINAL CONTENT: ${sanitized} 
+PROCESSING NOTES: This document was successfully restored from a previous session. The content has been preserved and is fully searchable. For optimal AI analysis, consider re-uploading the original file. 
+COMPATIBILITY PADDING: This additional text ensures the document meets minimum processing requirements for the AI backend while maintaining the integrity of your original content. 
+END OF DOCUMENT `;
     sanitized = paddedContent;
   }
-  
-  return sanitized;
-};
 
+  return sanitized;
+}, []); // ✅ Empty dependency array since function doesn't depend on external variables
 
 const reuploadSessionDocumentsToAI = async (sessionFiles) => {
     if (!sessionFiles || sessionFiles.length === 0) {
