@@ -235,7 +235,6 @@ ${fileData.tableData.map(row => Object.values(row).join(' ')).join('\n')}
     return successCount > 0;
 };
 
-
 const handleSelectSession = async (session) => {
     if (session.id === currentSessionId) {
         setShowHistory(false);
@@ -992,44 +991,60 @@ const handleFilesUpload = async (newFiles, appendToExisting = false) => {
 
         console.log(`🔍 Processing ${uniqueNewFiles.length} files for upload`);
 
-        // ✅ CRITICAL: Upload to AI backend FIRST with proper error handling
+        // ✅ STEP 1: Upload ALL files to AI backend first
         let aiUploadSuccess = false;
+        const aiUploadResults = [];
+        
         try {
             console.log('📤 Uploading files to AI backend...');
             
-            // ✅ Upload each file individually for better error handling
             for (const file of uniqueNewFiles) {
-                const formData = new FormData();
-                formData.append('file', file);
+                try {
+                    const formData = new FormData();
+                    formData.append('file', file);
 
-                const aiResponse = await fetch(`${API_BASE_URL}/api/ai/upload`, {
-                    method: 'POST',
-                    body: formData
-                });
+                    const aiResponse = await fetch(`${API_BASE_URL}/api/ai/upload`, {
+                        method: 'POST',
+                        body: formData
+                    });
 
-                if (!aiResponse.ok) {
-                    const errorText = await aiResponse.text();
-                    console.error(`❌ AI upload failed for ${file.name}:`, aiResponse.status, errorText);
-                    throw new Error(`AI upload failed for ${file.name}: ${aiResponse.status}`);
+                    if (aiResponse.ok) {
+                        console.log(`✅ ${file.name} uploaded to AI backend successfully`);
+                        aiUploadResults.push({ name: file.name, success: true });
+                    } else {
+                        const errorText = await aiResponse.text();
+                        console.error(`❌ AI upload failed for ${file.name}:`, aiResponse.status, errorText);
+                        aiUploadResults.push({ name: file.name, success: false, error: errorText });
+                    }
+                } catch (fileError) {
+                    console.error(`❌ AI upload error for ${file.name}:`, fileError);
+                    aiUploadResults.push({ name: file.name, success: false, error: fileError.message });
                 }
 
-                console.log(`✅ ${file.name} uploaded to AI backend successfully`);
+                // Small delay between uploads
+                await new Promise(resolve => setTimeout(resolve, 500));
             }
 
-            aiUploadSuccess = true;
-            console.log('✅ All files uploaded to AI backend successfully');
+            aiUploadSuccess = aiUploadResults.some(result => result.success);
+            console.log(`✅ AI backend upload completed: ${aiUploadResults.filter(r => r.success).length}/${uniqueNewFiles.length} files successful`);
 
         } catch (aiError) {
             console.error('❌ AI backend upload error:', aiError);
             aiUploadSuccess = false;
         }
 
-        // ✅ Process files for backend storage regardless of AI backend status
-        const processedNewFiles = await Promise.all(
-            uniqueNewFiles.map(async (file, index) => {
+        // ✅ STEP 2: Process and store ALL files in backend sequentially
+        const processedNewFiles = [];
+        
+        for (let index = 0; index < uniqueNewFiles.length; index++) {
+            const file = uniqueNewFiles[index];
+            
+            try {
                 if (!validateFileType(file)) {
                     throw new Error(`Unsupported file type: ${file.name}`);
                 }
+
+                console.log(`📄 Processing file ${index + 1}/${uniqueNewFiles.length}: ${file.name}`);
 
                 const contentResult = await readFileContent(file);
                 let text, tableData = null, isTable = false;
@@ -1042,10 +1057,10 @@ const handleFilesUpload = async (newFiles, appendToExisting = false) => {
                     text = contentResult;
                 }
 
-                console.log(`📄 Processed ${file.name}: ${text.length} characters`);
+                console.log(`📄 Extracted ${text.length} characters from ${file.name}`);
 
                 const fileData = {
-                    id: `${currentSessionId}_doc_${Date.now()}_${index}`,
+                    id: `${currentSessionId}_doc_${Date.now()}_${Math.random().toString(36).substr(2, 9)}_${index}`,
                     file: file,
                     name: file.name,
                     type: file.type,
@@ -1057,7 +1072,7 @@ const handleFilesUpload = async (newFiles, appendToExisting = false) => {
                     sessionId: currentSessionId,
                     isFromSession: false,
                     hasFullContent: true,
-                    aiBackendUploaded: aiUploadSuccess // ✅ Track AI backend status
+                    aiBackendUploaded: aiUploadResults.find(r => r.name === file.name)?.success || false
                 };
 
                 if (isTable && tableData && tableData.length > 0) {
@@ -1065,39 +1080,96 @@ const handleFilesUpload = async (newFiles, appendToExisting = false) => {
                     setCurrentTableFile(fileData);
                 }
 
-                // ✅ Store in backend session
-                try {
-                    await recordInUnifiedSession('DOCUMENT_UPLOAD', {
-                        documentId: fileData.id,
-                        fileName: file.name,
-                        fileType: file.type,
-                        fileSize: file.size,
-                        textContent: text,
-                        contentLength: text.length,
-                        isTableData: isTable,
-                        tableRowCount: tableData ? tableData.length : 0,
-                        hasNLPSupport: isTable,
-                        aiBackendUploaded: aiUploadSuccess
-                    });
-                    console.log(`✅ Stored ${file.name} in backend session`);
-                } catch (storageError) {
-                    console.error(`❌ Backend storage error for ${file.name}:`, storageError);
+                // ✅ CRITICAL: Store EACH file individually in backend with retry
+                let backendStoreSuccess = false;
+                let retryCount = 0;
+                const maxRetries = 3;
+
+                while (!backendStoreSuccess && retryCount < maxRetries) {
+                    try {
+                        console.log(`📤 Storing ${file.name} in backend (attempt ${retryCount + 1}/${maxRetries})`);
+                        
+                        const response = await fetch(`${API_BASE_URL}/api/history/document/add`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                userId: user.userId,
+                                sessionId: currentSessionId,
+                                documentId: fileData.id,
+                                fileName: file.name,
+                                fileType: file.type,
+                                fileSize: file.size,
+                                textContent: text,
+                                contentLength: text.length,
+                                isTableData: isTable,
+                                tableRowCount: tableData ? tableData.length : 0,
+                                hasNLPSupport: isTable,
+                                aiBackendUploaded: fileData.aiBackendUploaded,
+                                uploadIndex: index // ✅ Add upload order tracking
+                            })
+                        });
+
+                        if (response.ok) {
+                            backendStoreSuccess = true;
+                            console.log(`✅ ${file.name} stored in backend successfully`);
+                        } else {
+                            const errorText = await response.text();
+                            console.error(`❌ Backend storage failed for ${file.name}:`, response.status, errorText);
+                            retryCount++;
+                            
+                            if (retryCount < maxRetries) {
+                                await new Promise(resolve => setTimeout(resolve, 1000 * retryCount)); // Exponential backoff
+                            }
+                        }
+                    } catch (storageError) {
+                        console.error(`❌ Backend storage error for ${file.name} (attempt ${retryCount + 1}):`, storageError);
+                        retryCount++;
+                        
+                        if (retryCount < maxRetries) {
+                            await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+                        }
+                    }
                 }
 
-                return fileData;
-            })
-        );
+                if (!backendStoreSuccess) {
+                    console.error(`❌ Failed to store ${file.name} in backend after ${maxRetries} attempts`);
+                }
 
-        // ✅ Update UI state
+                processedNewFiles.push(fileData);
+
+                // ✅ Small delay between backend operations
+                await new Promise(resolve => setTimeout(resolve, 300));
+
+            } catch (fileProcessError) {
+                console.error(`❌ Error processing ${file.name}:`, fileProcessError);
+            }
+        }
+
+        // ✅ STEP 3: Update UI state
         if (appendToExisting) {
             setUploadedFiles(prevFiles => [...prevFiles, ...processedNewFiles]);
         } else {
             setUploadedFiles(processedNewFiles);
         }
 
-        console.log(`✅ Successfully processed ${processedNewFiles.length} files`);
+        console.log(`✅ Successfully processed ${processedNewFiles.length}/${uniqueNewFiles.length} files`);
+        console.log(`📁 Processed files:`, processedNewFiles.map(f => f.name));
 
-        // ✅ Show status message with AI backend status
+        // ✅ STEP 4: Verify backend storage
+        setTimeout(async () => {
+            try {
+                console.log('🔍 Verifying backend storage...');
+                const verifyResponse = await fetch(`${API_BASE_URL}/api/history/session/${currentSessionId}/documents`);
+                if (verifyResponse.ok) {
+                    const verifyData = await verifyResponse.json();
+                    console.log(`📊 Backend verification: ${verifyData.documents?.length || 0} documents stored`);
+                }
+            } catch (verifyError) {
+                console.warn('⚠️ Could not verify backend storage:', verifyError);
+            }
+        }, 2000);
+
+        // ✅ Show enhanced status message
         const successMessage = {
             id: Date.now(),
             type: 'ai',
@@ -1113,6 +1185,7 @@ const handleFilesUpload = async (newFiles, appendToExisting = false) => {
         setIsLoading(false);
     }
 };
+
 
   // ✅ ENHANCED: Search with table data support
   const handleSearch = (term) => {
