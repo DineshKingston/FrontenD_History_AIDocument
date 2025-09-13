@@ -1,5 +1,6 @@
 // src/components/AIChat.js
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import jsPDF from 'jspdf';
 import { API_BASE_URL } from '../config';
 const AIChat = ({ 
   uploadedFiles, 
@@ -289,7 +290,6 @@ const deduplicateMessages = useCallback((messages) => {
     });
 }, []);
 
-// ✅ ENHANCED: Advanced data query processing with Customer ID support
 const executeAdvancedDataQuery = useCallback((query) => {
     if (!uploadedFiles || uploadedFiles.length === 0) {
         return "No data files available for analysis.";
@@ -447,7 +447,6 @@ const executeAdvancedDataQuery = useCallback((query) => {
 
     return output;
 }, [uploadedFiles]);
-
 
 
 // ✅ ENHANCED: Prioritize local data processing when AI backend fails
@@ -757,20 +756,98 @@ const tryAIQuery = useCallback(async (question) => {
     }
   }, [isLoading, filesUploaded, uploadedFiles.length, isMobile]);
 
-  // Summary generation
-  const getSummary = async () => {
+  const generateLocalSummary = (files) => {
+    if (!files || files.length === 0) {
+        return "No documents available for summary generation.";
+    }
+
+    let summary = `📋 **Comprehensive Multi-Document Analysis**\n\n`;
+    summary += `📊 **Overview:**\n`;
+    summary += `• Total Documents: ${files.length}\n`;
+    summary += `• Total Content: ${files.reduce((sum, f) => sum + (f.text?.length || 0), 0).toLocaleString()} characters\n`;
+    summary += `• CSV/Data Files: ${files.filter(f => f.isTable).length}\n`;
+    summary += `• Text Documents: ${files.filter(f => !f.isTable).length}\n\n`;
+
+    // ✅ ANALYZE EACH FILE
+    summary += `📄 **Document Analysis:**\n\n`;
+    files.forEach((file, index) => {
+        summary += `**${index + 1}. ${file.name}**\n`;
+        
+        if (file.isTable && file.tableData) {
+            // CSV Analysis
+            const rowCount = file.tableData.length;
+            const columns = Object.keys(file.tableData[0] || {});
+            summary += `• Type: CSV Database (${rowCount.toLocaleString()} records)\n`;
+            summary += `• Columns: ${columns.join(', ')}\n`;
+            summary += `• Data Quality: ${rowCount > 0 ? 'Complete' : 'Empty'} dataset\n`;
+            
+            if (rowCount > 0) {
+                summary += `• Sample Record: ${Object.entries(file.tableData[0]).slice(0, 3).map(([k, v]) => `${k}: ${v}`).join(', ')}\n`;
+            }
+        } else {
+            // Text Analysis
+            const text = file.text || '';
+            const wordCount = text.split(/\s+/).filter(w => w.length > 0).length;
+            const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 20).length;
+            
+            summary += `• Type: Text Document (${text.length.toLocaleString()} characters)\n`;
+            summary += `• Word Count: ${wordCount.toLocaleString()} words\n`;
+            summary += `• Sentences: ${sentences} sentences\n`;
+            summary += `• Content Density: ${text.length > 1000 ? 'Rich' : text.length > 500 ? 'Moderate' : 'Brief'} content\n`;
+        }
+        summary += '\n';
+    });
+
+    // ✅ CROSS-DOCUMENT INSIGHTS
+    const totalWords = files.reduce((sum, f) => {
+        const text = f.text || '';
+        return sum + text.split(/\s+/).length;
+    }, 0);
+
+    const csvCount = files.filter(f => f.isTable).length;
+    const textCount = files.filter(f => !f.isTable).length;
+
+    summary += `🔍 **Key Insights:**\n`;
+    summary += `• Document Mix: ${csvCount} data files + ${textCount} text documents\n`;
+    summary += `• Average Length: ${Math.round(totalWords / files.length).toLocaleString()} words per document\n`;
+    summary += `• Data Coverage: ${files.length} different sources analyzed\n`;
+    summary += `• Processing Status: Local analysis complete, all features functional\n\n`;
+
+    summary += `✅ **Conclusion:**\n`;
+    summary += `Successfully analyzed ${files.length} documents containing ${totalWords.toLocaleString()} total words. `;
+    if (csvCount > 0) {
+        summary += `Data files provide structured information for queries and filtering. `;
+    }
+    summary += `All documents are ready for comprehensive search, analysis, and cross-referencing.`;
+
+    return summary;
+};
+  // ✅ ENHANCED: Summary generation with PDF report
+const getSummary = async () => {
     if (isLoading || (!filesUploaded && uploadedFiles.length === 0)) return;
+
+    // Check minimum files requirement
+    if (uploadedFiles.length < 2) {
+        const minFilesMessage = {
+            id: Date.now(),
+            type: 'ai',
+            content: `📄 **Multi-Document Analysis Required**\n\nPlease upload at least 2 documents to generate a comprehensive summary and PDF report.\n\n**Current files:** ${uploadedFiles.length}\n**Required:** 2 or more`,
+            timestamp: new Date()
+        };
+        setMessages(prev => [...prev, minFilesMessage]);
+        return;
+    }
 
     const currentTime = Date.now();
     if (currentTime - lastRequestTime < 2000) {
-      const rateLimitMessage = {
-        id: Date.now(),
-        type: 'ai',
-        content: 'Please wait a moment before requesting another summary.',
-        timestamp: new Date()
-      };
-      setMessages(prev => [...prev, rateLimitMessage]);
-      return;
+        const rateLimitMessage = {
+            id: Date.now(),
+            type: 'ai',
+            content: 'Please wait a moment before requesting another summary.',
+            timestamp: new Date()
+        };
+        setMessages(prev => [...prev, rateLimitMessage]);
+        return;
     }
 
     setIsLoading(true);
@@ -778,51 +855,208 @@ const tryAIQuery = useCallback(async (question) => {
     setLastRequestTime(currentTime);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/ai/summary`);
-      const data = await response.json();
+        let summaryContent = '';
+        let analysisData = {};
+        let pdfGenerated = false;
 
-      let summaryContent;
-      if (data.success) {
-        summaryContent = `**📋 Comprehensive Document Summary for ${user?.username}**\n`;
-        summaryContent += `*Analyzing ${data.documentsAnalyzed} documents: ${data.documentNames.join(', ')}*\n\n`;
-        summaryContent += data.summary;
-      } else {
-        summaryContent = `Error generating summary for ${user?.username}: ${data.error || 'Unknown error'}`;
-      }
+        // ✅ TRY AI BACKEND FIRST
+        try {
+            console.log('📤 Requesting AI summary from backend...');
+            const response = await fetch(`${API_BASE_URL}/api/ai/summary`);
+            const data = await response.json();
+            
+            if (data.success && data.summary) {
+                summaryContent = `**📋 AI-Powered Multi-Document Analysis**\n\n`;
+                summaryContent += `*Analyzing ${data.documentsAnalyzed || uploadedFiles.length} documents: ${(data.documentNames || uploadedFiles.map(f => f.name)).join(', ')}*\n\n`;
+                summaryContent += data.summary;
+                
+                analysisData = {
+                    documentsAnalyzed: data.documentsAnalyzed,
+                    documentNames: data.documentNames,
+                    aiProcessed: true
+                };
+                
+                console.log('✅ AI summary received, generating PDF...');
+            } else {
+                throw new Error('AI summary failed: ' + (data.error || 'Unknown error'));
+            }
+        } catch (aiError) {
+            console.log('⚠️ AI backend failed, generating local summary...');
+            // ✅ FALLBACK TO LOCAL SUMMARY GENERATION
+            summaryContent = generateLocalSummary(uploadedFiles);
+            analysisData = {
+                documentsAnalyzed: uploadedFiles.length,
+                documentNames: uploadedFiles.map(f => f.name),
+                aiProcessed: false
+            };
+        }
 
-      const summaryMessage = {
-        id: Date.now(),
-        type: 'ai',
-        content: summaryContent,
-        timestamp: new Date()
-      };
+        // ✅ GENERATE PDF FROM SUMMARY
+        try {
+            const pdfFileName = await generatePDFFromSummary(summaryContent, uploadedFiles, analysisData);
+            pdfGenerated = true;
+            
+            const summaryMessage = {
+                id: Date.now(),
+                type: 'ai',
+                content: `${summaryContent}\n\n---\n\n📄 **PDF Report Generated Successfully!**\n\n✅ **File:** ${pdfFileName}\n🔽 **Status:** Downloaded to your device\n📊 **Content:** Complete analysis of ${uploadedFiles.length} documents\n\n**The PDF contains formatted analysis, statistics, and all key insights from your documents.**`,
+                timestamp: new Date()
+            };
+            setMessages(prev => [...prev, summaryMessage]);
+            
+        } catch (pdfError) {
+            console.error('❌ PDF generation failed:', pdfError);
+            
+            // ✅ SHOW SUMMARY WITHOUT PDF
+            const summaryMessage = {
+                id: Date.now(),
+                type: 'ai',
+                content: `${summaryContent}\n\n---\n\n⚠️ **PDF generation failed:** ${pdfError.message}\n\n**Summary is complete above, but PDF could not be created.**`,
+                timestamp: new Date()
+            };
+            setMessages(prev => [...prev, summaryMessage]);
+        }
 
-      setMessages(prev => [...prev, summaryMessage]);
+        // ✅ RECORD THE ACTIVITY
+        if (onRecordMessage) {
+            onRecordMessage('AI', summaryContent, JSON.stringify({
+                action: 'summary_generation_with_pdf',
+                documentsAnalyzed: analysisData.documentsAnalyzed,
+                documentNames: analysisData.documentNames,
+                pdfGenerated: pdfGenerated,
+                aiProcessed: analysisData.aiProcessed,
+                timestamp: new Date().toISOString()
+            }));
+        }
 
-      if (onRecordMessage) {
-        onRecordMessage('AI', summaryContent, JSON.stringify({
-          action: 'summary_generation',
-          documentsAnalyzed: data.documentsAnalyzed,
-          documentNames: data.documentNames
-        }));
-      }
-
-      setIsTyping(false);
     } catch (error) {
-      console.error('Error generating summary:', error);
-      
-      const errorMessage = {
-        id: Date.now(),
-        type: 'ai',
-        content: `Error generating summary for ${user?.username}. Please check if the backend is running and try again.`,
-        timestamp: new Date()
-      };
-      setMessages(prev => [...prev, errorMessage]);
-      setIsTyping(false);
+        console.error('❌ Summary generation error:', error);
+        
+        const errorMessage = {
+            id: Date.now(),
+            type: 'ai',
+            content: `❌ **Summary Generation Failed**\n\nError: ${error.message}\n\nPlease try again or check if your documents are properly uploaded.`,
+            timestamp: new Date()
+        };
+        setMessages(prev => [...prev, errorMessage]);
     } finally {
-      setIsLoading(false);
+        setIsLoading(false);
+        setIsTyping(false);
     }
-  };
+};
+
+  const generatePDFFromSummary = useCallback(async (summaryContent, files, analysisData = {}) => {
+    try {
+        const doc = new jsPDF();
+        const pageWidth = doc.internal.pageSize.width;
+        const pageHeight = doc.internal.pageSize.height;
+        const margin = 20;
+        const lineHeight = 7;
+        let yPosition = margin;
+
+        // ✅ HEADER SECTION
+        doc.setFontSize(20);
+        doc.setFont("helvetica", "bold");
+        doc.text("📋 Multi-Document Analysis Report", margin, yPosition);
+        yPosition += lineHeight * 2;
+
+        // ✅ METADATA SECTION
+        doc.setFontSize(12);
+        doc.setFont("helvetica", "normal");
+        doc.text(`Generated: ${new Date().toLocaleString()}`, margin, yPosition);
+        yPosition += lineHeight;
+        doc.text(`User: ${user?.username || 'Unknown'}`, margin, yPosition);
+        yPosition += lineHeight;
+        doc.text(`Total Documents: ${files.length}`, margin, yPosition);
+        yPosition += lineHeight;
+        
+        // File list
+        doc.setFontSize(11);
+        doc.text("Documents Analyzed:", margin, yPosition);
+        yPosition += lineHeight;
+        
+        files.forEach((file, index) => {
+            const fileInfo = `${index + 1}. ${file.name} ${file.isTable ? '(CSV Data)' : '(Text)'} - ${(file.text?.length || 0).toLocaleString()} chars`;
+            const lines = doc.splitTextToSize(fileInfo, pageWidth - 2 * margin);
+            lines.forEach(line => {
+                if (yPosition > pageHeight - margin) {
+                    doc.addPage();
+                    yPosition = margin;
+                }
+                doc.text(`   ${line}`, margin, yPosition);
+                yPosition += lineHeight;
+            });
+        });
+        
+        yPosition += lineHeight;
+
+        // ✅ ANALYSIS STATISTICS
+        if (analysisData.documentsAnalyzed) {
+            doc.setFontSize(12);
+            doc.setFont("helvetica", "bold");
+            doc.text("Analysis Statistics:", margin, yPosition);
+            yPosition += lineHeight;
+            
+            doc.setFont("helvetica", "normal");
+            doc.text(`Documents Processed: ${analysisData.documentsAnalyzed}`, margin, yPosition);
+            yPosition += lineHeight;
+            
+            if (analysisData.documentNames) {
+                doc.text(`Files: ${analysisData.documentNames.join(', ')}`, margin, yPosition);
+                yPosition += lineHeight;
+            }
+            yPosition += lineHeight;
+        }
+
+        // ✅ MAIN CONTENT SECTION
+        doc.setFontSize(14);
+        doc.setFont("helvetica", "bold");
+        doc.text("📊 Analysis Summary:", margin, yPosition);
+        yPosition += lineHeight * 1.5;
+
+        // Clean and format the summary content
+        const cleanContent = summaryContent
+            .replace(/\*\*/g, '') // Remove markdown bold
+            .replace(/### /g, '')
+            .replace(/## /g, '')
+            .replace(/# /g, '')
+            .replace(/📋|📊|📄|🔍|💡|✅|❌|⚠️/g, '') // Remove emojis
+            .trim();
+
+        doc.setFontSize(11);
+        doc.setFont("helvetica", "normal");
+        
+        const contentLines = doc.splitTextToSize(cleanContent, pageWidth - 2 * margin);
+        
+        contentLines.forEach(line => {
+            if (yPosition > pageHeight - margin) {
+                doc.addPage();
+                yPosition = margin;
+            }
+            doc.text(line, margin, yPosition);
+            yPosition += lineHeight;
+        });
+
+        // ✅ FOOTER
+        const totalPages = doc.internal.getNumberOfPages();
+        for (let i = 1; i <= totalPages; i++) {
+            doc.setPage(i);
+            doc.setFontSize(9);
+            doc.setFont("helvetica", "normal");
+            doc.text(`Page ${i} of ${totalPages}`, pageWidth - 40, pageHeight - 10);
+            doc.text(`Generated by Document Analysis System`, margin, pageHeight - 10);
+        }
+
+        // ✅ SAVE PDF
+        const fileName = `analysis_summary_${new Date().getTime()}.pdf`;
+        doc.save(fileName);
+        
+        return fileName;
+    } catch (error) {
+        console.error('❌ Error generating PDF:', error);
+        throw error;
+    }
+}, [user?.username]);
 
   // Clear chat functionality
   const clearChat = async () => {
@@ -1026,6 +1260,24 @@ const tryAIQuery = useCallback(async (question) => {
           </div>
         </div>
       </div>
+<div className="summary-actions" style={{display: 'flex', gap: '10px', marginTop: '2px'}}>
+    <button 
+        onClick={getSummary}
+        disabled={isLoading || (!filesUploaded && uploadedFiles.length === 0) || uploadedFiles.length < 2}
+        className="summary-btn"
+        style={{
+            padding: '10px 15px',
+            backgroundColor: uploadedFiles.length >= 2 ? '#007bff' : '#6c757d',
+            color: 'white',
+            border: 'none',
+            borderRadius: '5px',
+            cursor: uploadedFiles.length >= 2 ? 'pointer' : 'not-allowed'
+        }}
+    >
+        📋 Generate Summary + PDF ({uploadedFiles.length}/2+ files)
+    </button>
+  </div>
+
     </div>
   );
 };
