@@ -42,6 +42,18 @@ const FileUpload = ({ onFilesUpload, uploadedFiles, isLoading, onClear }) => {
       fileInputRef.current?.click();
     }
   };
+  // Updated file type validation
+  const getFileTypeIcon = (fileName) => {
+    const extension = fileName.toLowerCase().split('.').pop();
+    switch (extension) {
+      case 'pdf': return '📄';
+      case 'docx': case 'doc': return '📝';
+      case 'txt': return '📋';
+      case 'csv': return '📊'; // New CSV icon
+      case 'xlsx': case 'xls': return '📈'; // New Excel icon
+      default: return '📎';
+    }
+  };
 
   return (
     <div className="file-upload-section">
@@ -65,7 +77,7 @@ const FileUpload = ({ onFilesUpload, uploadedFiles, isLoading, onClear }) => {
           <p className="upload-text">
             {isLoading ? 
               `Processing ${uploadedFiles.length} files...` : 
-              'Support: PDF, DOCX, DOC, TXT files'
+              'Support: PDF, DOCX, DOC, TXT, CSV, XLSX, XLS files'
             }
           </p>
           <div className="upload-features">
@@ -79,7 +91,7 @@ const FileUpload = ({ onFilesUpload, uploadedFiles, isLoading, onClear }) => {
           ref={fileInputRef}
           type="file"
           multiple
-          accept=".pdf,.docx,.doc,.txt"
+          accept=".pdf,.docx,.doc,.txt,.csv,.xlsx,.xls"
           onChange={handleFileSelect}
           style={{ display: 'none' }}
           disabled={isLoading}
