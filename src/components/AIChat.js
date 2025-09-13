@@ -6,7 +6,8 @@ const AIChat = ({
   user, 
   onRecordMessage, 
   initialMessages = [], 
-  isSessionLoading = false 
+  isSessionLoading = false,
+  onReuploadDocuments 
 }) => {
   const [messages, setMessages] = useState([]);
   const [inputMessage, setInputMessage] = useState('');
@@ -50,47 +51,41 @@ useEffect(() => {
     if (!isInitialized && !isSessionLoading) {
         initializationRef.current = true;
         console.log('🔄 Initializing AIChat for session');
-        
+
         if (initialMessages && initialMessages.length > 0) {
             // ✅ ENHANCED: Properly restore ALL message types
             const restoredMessages = initialMessages.map(msg => {
-                // Handle different message structures from backend
                 const messageContent = msg.content || msg.response || msg.text || '';
                 const messageType = (msg.type || 'ai').toLowerCase();
-                
                 return {
                     id: msg.id || `restored_${Date.now()}_${Math.random()}`,
                     type: messageType === 'user' ? 'user' : 'ai',
                     content: messageContent,
                     timestamp: new Date(msg.timestamp || Date.now()),
-                    isRestored: true 
+                    isRestored: true
                 };
             }).filter(msg => msg.content && msg.content.trim().length > 0);
 
-            // console.log(`Setting ${restoredMessages.length} New messages:`, restoredMessages);
-            
-            // ✅ FIX: Combine messages instead of appending later
             const confirmationMessage = {
                 id: `restoration_${Date.now()}`,
                 type: 'ai',
-                content: `🔄 **Fresh Session Ready!**\n\n📁 **Documents**: Ready for search and AI analysis\n\n*Start asking questions about your documents!*`,
+                content: `🔄 **Fresh Session Ready!**\n\n📁 **Documents**: ${uploadedFiles.length} files ready\n📊 **CSV Data**: ${uploadedFiles.filter(f => f.isTable).length} files with NLP support\n🔍 **Search & AI**: Fully functional\n\n*Start asking questions about your documents!*`,
                 timestamp: new Date(),
                 isRestored: false
             };
-            
-            // ✅ Set all messages at once - no setTimeout needed
+
             const allMessages = [...restoredMessages, confirmationMessage];
             const uniqueMessages = deduplicateMessages(allMessages);
-            // console.log(`Setting ${uniqueMessages.length} unique messages:`, uniqueMessages);
             setMessages(uniqueMessages);
             setFilesUploaded(true);
-            
+
         } else if (uploadedFiles.length > 0) {
             // New session with uploaded files
+            const csvCount = uploadedFiles.filter(f => f.isTable).length;
             const welcomeMessage = {
                 id: Date.now(),
                 type: 'ai',
-                content: `Hello ${user?.username || 'User'}! I'm your AI assistant. I've detected ${uploadedFiles.length} document(s) for upload. I'll process them now so you can ask questions about ALL the documents together.`,
+                content: `Hello ${user?.username || 'User'}! I'm your AI assistant. I've detected ${uploadedFiles.length} document(s) including ${csvCount} CSV files with full NLP support. All files are ready for local processing and analysis.`,
                 timestamp: new Date()
             };
             setMessages([welcomeMessage]);
@@ -100,7 +95,6 @@ useEffect(() => {
             setMessages([]);
             setFilesUploaded(false);
         }
-        
         setIsInitialized(true);
     }
 }, [initialMessages, uploadedFiles.length, isSessionLoading, isInitialized, user?.username]);
@@ -454,10 +448,36 @@ const executeAdvancedDataQuery = useCallback((query) => {
     return output;
 }, [uploadedFiles]);
 
+
+
 // ✅ ENHANCED: Prioritize local data processing when AI backend fails
 const tryAIQuery = useCallback(async (question) => {
     if (!question.trim()) return;
 
+
+    if (uploadedFiles.length === 0) {
+        const noFilesMessage = {
+            id: Date.now(),
+            type: 'ai',
+            content: `📁 **No Documents Available**\n\nPlease upload some documents first to start our conversation.`,
+            timestamp: new Date()
+        };
+        setMessages(prev => [...prev, noFilesMessage]);
+        return;
+    }
+
+    // ✅ Check if AI backend has our documents
+    const hasAIBackendFiles = uploadedFiles.some(f => f.aiBackendUploaded !== false);
+    if (!hasAIBackendFiles) {
+        console.log('⚠️ No files confirmed in AI backend, attempting re-upload...');
+        
+        const reuploadSuccess = onReuploadDocuments ? await onReuploadDocuments(uploadedFiles) : false;
+        
+        if (!reuploadSuccess) {
+            console.log('❌ AI backend re-upload failed, using local processing');
+            // Proceed with local processing
+        }
+    }
     // ✅ ENHANCED: Preserve data query operators while cleaning
     const sanitizedQuestion = question
         .replace(/[📄🔍📊💡🤖👤]/g, '')

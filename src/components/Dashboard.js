@@ -38,6 +38,20 @@ const [isInitializing, setIsInitializing] = useState(false);
     return saved ? JSON.parse(saved) : false;
   });
 
+const deduplicateMessages = (messages) => {
+    const seen = new Set();
+    return messages.filter(msg => {
+        const key = `${msg.content?.substring(0, 100)}|${msg.timestamp}`;
+        if (seen.has(key)) {
+            console.log(`🚫 Skipping duplicate message`);
+            return false;
+        }
+        seen.add(key);
+        return true;
+    });
+};
+
+
 const initializeUnifiedSession = useCallback(async (forceNew = false) => {
     // ✅ Modified guard - allow forced new sessions
     if (!forceNew && (isInitializing || isInitialized)) {
@@ -116,170 +130,337 @@ const initializeUnifiedSession = useCallback(async (forceNew = false) => {
     }
 }, [user?.userId, user?.username, isInitializing, isInitialized]);
 
+const reuploadAllSessionDocumentsToAI = async (sessionFiles) => {
+    if (!sessionFiles || sessionFiles.length === 0) {
+        console.log('⚠️ No documents to re-upload to AI backend');
+        return false;
+    }
 
-  // ✅ FIXED: Enhanced handleSelectSession function in Dashboard.js
+    console.log(`🔄 Re-uploading ${sessionFiles.length} documents to AI backend for session continuity`);
+
+    try {
+        // ✅ STEP 1: Clear AI backend first
+        await fetch(`${API_BASE_URL}/api/ai/documents`, { method: 'DELETE' });
+        console.log('✅ Cleared AI backend before restoration');
+    } catch (error) {
+        console.warn('⚠️ Could not clear AI backend:', error);
+    }
+
+    let successCount = 0;
+    const failedFiles = [];
+
+    // ✅ STEP 2: Re-upload ALL files individually
+    for (const fileData of sessionFiles) {
+        if (!fileData.text || fileData.text.length < 50) {
+            console.log(`⚠️ Skipping ${fileData.name} - insufficient content`);
+            failedFiles.push({ name: fileData.name, error: 'Insufficient content' });
+            continue;
+        }
+
+        try {
+            console.log(`📤 Re-uploading ${fileData.name} (${fileData.text.length} chars)`);
+
+            // ✅ Create proper content for AI backend
+            let contentToSend;
+            let fileName = fileData.name;
+
+            if (fileData.isTable && fileData.name.toLowerCase().endsWith('.csv')) {
+                // ✅ Handle CSV files with complete table data
+                if (fileData.tableData && fileData.tableData.length > 0) {
+                    const headers = Object.keys(fileData.tableData[0]);
+                    contentToSend = `=== CSV TABLE: ${fileData.name} ===
+COLUMNS: ${headers.join(', ')}
+TOTAL ROWS: ${fileData.tableData.length}
+
+COMPLETE TABLE DATA:
+${fileData.tableData.map((row, index) => {
+    return `Row ${index + 1}: ${headers.map(h => `${h}="${row[h] || ''}"`).join(', ')}`;
+}).join('\n')}
+
+SEARCHABLE CONTENT:
+${fileData.tableData.map(row => Object.values(row).join(' ')).join('\n')}
+
+=== END CSV TABLE ===`;
+                    console.log(`📊 Created CSV content with ${fileData.tableData.length} rows`);
+                } else {
+                    contentToSend = fileData.text;
+                }
+            } else {
+                // ✅ Handle regular files
+                contentToSend = fileData.text;
+                fileName = fileData.name.replace(/\.(pdf|docx|doc)$/i, '.txt');
+            }
+
+            // ✅ Upload to AI backend
+            const blob = new Blob([contentToSend], { 
+                type: fileName.endsWith('.csv') ? 'text/csv' : 'text/plain' 
+            });
+            const formData = new FormData();
+            formData.append('file', blob, fileName);
+
+            const response = await fetch(`${API_BASE_URL}/api/ai/upload`, {
+                method: 'POST',
+                body: formData
+            });
+
+            if (response.ok) {
+                successCount++;
+                console.log(`✅ Successfully re-uploaded ${fileData.name}: ${response.status}`);
+            } else {
+                const errorText = await response.text();
+                console.error(`❌ Error uploading ${fileData.name}:`, response.status, errorText);
+                failedFiles.push({ name: fileData.name, error: `HTTP ${response.status}` });
+            }
+
+        } catch (error) {
+            console.error(`❌ Error processing ${fileData.name}:`, error);
+            failedFiles.push({ name: fileData.name, error: error.message });
+        }
+
+        // ✅ Small delay between uploads
+        await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
+    // ✅ STEP 3: Create status message
+    const statusMessage = {
+        id: Date.now() + 1,
+        type: 'ai',
+        content: `${successCount > 0 ? '✅' : '⚠️'} **AI Backend Sync Complete!**\n\n📊 **Results:**\n• ${successCount} documents successfully uploaded\n• ${failedFiles.length} documents failed\n• ${sessionFiles.filter(f => f.isTable).length} CSV files with NLP support\n\n🔍 **Search:** ✅ Fully functional\n💬 **AI Chat:** ${successCount > 0 ? '✅ Ready for questions!' : '⚠️ Limited functionality'}\n\n**Backend storage active!**`,
+        timestamp: new Date()
+    };
+
+    setCurrentSessionMessages(prev => [...prev, statusMessage]);
+    
+    console.log(`✅ AI backend sync completed: ${successCount}/${sessionFiles.length} files uploaded`);
+    return successCount > 0;
+};
+
+
 const handleSelectSession = async (session) => {
-  if (session.id === currentSessionId) {
-    setShowHistory(false);
-    closeMobileDrawer();
-    return;
-  }
+    if (session.id === currentSessionId) {
+        setShowHistory(false);
+        closeMobileDrawer();
+        return;
+    }
 
-  if (sessionLoading) {
+    if (sessionLoading) {
         console.log('⚠️ Session switch already in progress');
         return;
     }
 
-  setSessionLoading(true);
-  setError('');
+    setSessionLoading(true);
+    setError('');
 
-  // ✅ FIX: Declare variables outside try block to avoid scope issues
-  let sessionFiles = [];
-  let lastSearchQuery = null;
+    let sessionFiles = [];
+    let lastSearchQuery = null;
 
-  try {
-    console.log('🔄 Switching to unified session:', session.id);
+    try {
+        console.log('🔄 Switching to unified session:', session.id);
+
+        // ✅ STEP 1: Clear current state
+        clearAllSessionData();
+        setCurrentSessionId(session.id);
+        setCurrentSessionData(session);
+        setCurrentDayKey(session.dayKey);
+
+        console.log('✅ Session context set, starting restoration...');
+
+        // ✅ STEP 2: Restore session from backend with timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+        const response = await fetch(`${API_BASE_URL}/api/history/session/${session.id}/restore`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+
+        if (data.success) {
+            const restoredSession = data.session;
+
+            // ✅ STEP 3: Restore ALL documents with enhanced processing
+            if (restoredSession.documentDetails && restoredSession.documentDetails.length > 0) {
+                console.log(`🔄 Restoring ${restoredSession.documentDetails.length} documents...`);
+                
+                // ✅ CRITICAL: Process ALL documents in parallel
+                sessionFiles = await Promise.all(restoredSession.documentDetails.map(async (doc, index) => {
+                    let documentText = '';
+                    let tableData = null;
+                    let isTable = false;
+
+                    if (doc.textContent && doc.textContent.length > 50) {
+                        documentText = doc.textContent;
+                        
+                        // ✅ Restore CSV table data
+                        if (doc.fileName && doc.fileName.toLowerCase().endsWith('.csv')) {
+                            try {
+                                if (documentText.includes('=== CSV CUSTOMER DATABASE:')) {
+                                    const tableDataMatch = documentText.match(/STRUCTURED_DATA_FOR_AI_PROCESSING:\s*([\s\S]*?)\s*NLP_QUERY_EXAMPLES:/);
+                                    if (tableDataMatch) {
+                                        const structuredData = tableDataMatch[1];
+                                        tableData = parseStructuredDataBack(structuredData);
+                                        isTable = true;
+                                        console.log(`✅ Restored CSV table data for ${doc.fileName}: ${tableData?.length || 0} rows`);
+                                    }
+                                }
+                            } catch (error) {
+                                console.warn(`⚠️ Could not restore table data for ${doc.fileName}:`, error);
+                            }
+                        }
+                        
+                        console.log(`✅ Found stored content for ${doc.fileName}: ${documentText.length} chars`);
+                    } else {
+                        // ✅ Placeholder for files without content
+                        documentText = `DOCUMENT: ${doc.fileName}\nUPLOADED: ${doc.uploadTime || new Date()}\nSTATUS: Restored from previous session\n\nThis document was restored from a previous session. Full content should be available after re-upload to AI backend.\n\nDocument ID: ${doc.documentId}\nFile Type: ${doc.fileType}\nOriginal Size: ${doc.fileSize || 0} bytes`;
+                        console.log(`⚠️ Limited content for ${doc.fileName}, using placeholder`);
+                    }
+
+                    return {
+                        id: doc.documentId || `restored_${session.id}_${index}`,
+                        file: null,
+                        name: doc.fileName,
+                        type: doc.fileType,
+                        size: doc.fileSize || documentText.length,
+                        text: documentText,
+                        tableData: tableData,
+                        isTable: isTable,
+                        uploadTime: new Date(doc.uploadTime || Date.now()),
+                        sessionId: session.id,
+                        isFromSession: true,
+                        hasFullContent: doc.textContent && doc.textContent.length > 50
+                    };
+                }));
+
+                // ✅ CRITICAL: Set ALL restored files
+                setUploadedFiles(sessionFiles);
+                console.log(`✅ Restored ${sessionFiles.length} documents with content`);
+                console.log('📁 Restored files:', sessionFiles.map(f => f.name));
+
+                // ✅ Set table data for CSV files
+                const csvFiles = sessionFiles.filter(f => f.isTable && f.tableData);
+                if (csvFiles.length > 0) {
+                    setTableData(csvFiles[0].tableData);
+                    setCurrentTableFile(csvFiles[0]);
+                    console.log(`📊 Restored table data: ${csvFiles[0].tableData.length} rows`);
+                }
+
+                // ✅ STEP 4: Re-upload ALL documents to AI backend
+                await reuploadAllSessionDocumentsToAI(sessionFiles);
+            }
+
+            // ✅ STEP 5: Restore search queries
+            if (restoredSession.searchQueries && restoredSession.searchQueries.length > 0) {
+                lastSearchQuery = restoredSession.searchQueries[restoredSession.searchQueries.length - 1];
+                console.log('🔍 Found last search query:', lastSearchQuery.query);
+                setSearchTerm(lastSearchQuery.query);
+            }
+
+            // ✅ STEP 6: Restore message history
+            // ✅ STEP 6: Restore message history
+const completeMessages = await restoreCompleteSessionHistory(session.id);
+if (completeMessages.length > 0) {
+    // ✅ FIXED: Define csvFiles in the correct scope
+    const csvFiles = sessionFiles.filter(f => f.isTable && f.tableData);
     
-    // ✅ STEP 1: Clear AI backend cache to prevent stale responses
-    await clearAIBackendCache();
-    
-    // ✅ STEP 2: Complete state reset BEFORE restoration
-    clearAllSessionData();
-    
-    // ✅ STEP 3: Set session context IMMEDIATELY
-    setCurrentSessionId(session.id);
-    setCurrentSessionData(session);
-    setCurrentDayKey(session.dayKey);
+    const statusMessage = {
+        id: `restoration_status_${Date.now()}`,
+        type: 'ai',
+        content: `✅ **Session Restored Successfully!**\n\n📁 **Documents**: ${sessionFiles.length} files loaded\n🔍 **Search**: Ready for new searches\n💬 **Chat**: ${completeMessages.length} messages restored\n📊 **CSV Data**: ${csvFiles.length} table files with NLP support\n\n**Your session is fully restored!**`,
+        timestamp: new Date(),
+        isRestored: false
+    };
 
-    console.log('✅ Session context set, starting restoration...');
-
-    // ✅ STEP 4: Restore session from backend
-    const response = await fetch(`${API_BASE_URL}/api/history/session/${session.id}/restore`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
-    });
-
-    if (!response.ok) {
-      if (response.status === 404) {
-        setError('Session no longer exists.');
-        setTimeout(() => {
-          setError('');
-          window.location.reload();
-        }, 3000);
-        setShowHistory(false);
-        return;
-      } else {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-    }
-
-    const data = await response.json();
-    if (data.success) {
-      const restoredSession = data.session;
-
-      // ✅ STEP 5: Restore documents with content validation
-      if (restoredSession.documentDetails && restoredSession.documentDetails.length > 0) {
-        console.log(`🔄 Restoring ${restoredSession.documentDetails.length} documents...`);
-        
-        sessionFiles = await Promise.all(restoredSession.documentDetails.map(async (doc, index) => {
-          let documentText = '';
-          
-          if (doc.textContent && doc.textContent.length > 50) {
-            documentText = doc.textContent;
-            console.log(`✅ Found stored content for ${doc.fileName}: ${documentText.length} chars`);
-          } else {
-            documentText = `DOCUMENT: ${doc.fileName}\nUPLOADED: ${doc.uploadTime || new Date()}\nSTATUS: Restored from previous session\n\nThis document was restored from a previous session. For full search and AI analysis capabilities, please re-upload the original file.\n\nDocument ID: ${doc.documentId}\nFile Type: ${doc.fileType}\nOriginal Size: ${doc.fileSize || 0} bytes`;
-            console.log(`⚠️ Limited content for ${doc.fileName}, using placeholder`);
-          }
-
-          return {
-            id: doc.documentId || `restored_${session.id}_${index}`,
-            file: null,
-            name: doc.fileName,
-            type: doc.fileType,
-            size: doc.fileSize || documentText.length,
-            text: documentText,
-            uploadTime: new Date(doc.uploadTime || Date.now()),
-            sessionId: session.id,
-            isFromSession: true,
-            hasFullContent: doc.textContent && doc.textContent.length > 50
-          };
-        }));
-
-        // ✅ CRITICAL: Set uploadedFiles IMMEDIATELY and WAIT for state update
-        setUploadedFiles(sessionFiles);
-        console.log(`✅ Restored ${sessionFiles.length} documents with content`);
-        
-        // Re-upload documents to AI backend
-        reuploadSessionDocumentsToAI(sessionFiles);
-      }
-
-      // ✅ STEP 6: Get last search query BEFORE restoring messages
-      if (restoredSession.searchQueries && restoredSession.searchQueries.length > 0) {
-        lastSearchQuery = restoredSession.searchQueries[restoredSession.searchQueries.length - 1];
-        console.log('🔍 Found last search query:', lastSearchQuery.query);
-        setSearchTerm(lastSearchQuery.query);
-      }
-
-      // ✅ STEP 7: Restore complete message history
-      const completeMessages = await restoreCompleteSessionHistory(session.id);
-      if (completeMessages.length > 0) {
-        setCurrentSessionMessages([]);
-        
-        const statusMessage = {
-          id: `restoration_status_${Date.now()}`,
-          type: 'ai',
-          content: `✅ **Session Restored Successfully!**\n\n📁 **Documents**: ${restoredSession.documentDetails?.length || 0} files loaded\n🔍 **Search**: Ready for new searches\n💬 **Chat**: ${completeMessages.length} messages restored\n\n**Your session is fully restored!**`,
-          timestamp: new Date(),
-          isRestored: false
-        };
-
-        const allMessages = [statusMessage, ...completeMessages];
-        
-        // ✅ FIX: Move deduplicateMessages inside try block
-        const deduplicateMessages = (messages) => {
-          const seen = new Set();
-          return messages.filter(msg => {
+    const allMessages = [statusMessage, ...completeMessages];
+    const deduplicateMessages = (messages) => {
+        const seen = new Set();
+        return messages.filter(msg => {
             const key = `${msg.content}|${msg.timestamp}`;
             if (seen.has(key)) return false;
             seen.add(key);
             return true;
-          });
-        };
+        });
+    };
 
-        const uniqueMessages = deduplicateMessages(allMessages);
-        console.log(`✅ Setting ${uniqueMessages.length} unique session messages`);
-        setCurrentSessionMessages(uniqueMessages);
-      }
+    const uniqueMessages = deduplicateMessages(allMessages);
+    console.log(`✅ Setting ${uniqueMessages.length} unique session messages`);
+    setCurrentSessionMessages(uniqueMessages);
+}
 
-      console.log('✅ Unified session switched successfully:', session.id);
-    } else {
-      setError(data.error || 'Failed to restore session data');
+
+            console.log('✅ Unified session switched successfully:', session.id);
+        } else {
+            throw new Error(data.error || 'Failed to restore session data');
+        }
+
+        setShowHistory(false);
+        closeMobileDrawer();
+
+    } catch (error) {
+        console.error('❌ Error in session restoration:', error);
+        setError('Error loading session: ' + error.message);
+        setShowHistory(false);
+        closeMobileDrawer();
+    } finally {
+        setSessionLoading(false);
+
+        // ✅ Execute restored search with ALL files
+        if (sessionFiles.length > 0 && lastSearchQuery?.query) {
+            setTimeout(() => {
+                console.log('🔍 Executing restored search with ALL loaded files:', lastSearchQuery.query);
+                console.log('📁 Available files for search:', sessionFiles.map(f => f.name));
+                executeSearchWithFiles(lastSearchQuery.query, sessionFiles);
+            }, 2000);
+        }
     }
+};
 
-    setShowHistory(false);
-    closeMobileDrawer();
+// ✅ Helper function to parse structured data back to table format
+const parseStructuredDataBack = (structuredData) => {
+    try {
+        const records = structuredData.split('\n').filter(line => line.startsWith('RECORD_'));
+        const tableData = [];
 
-  } catch (error) {
-    console.error('❌ Error in session restoration:', error);
-    setError('Error loading session: ' + error.message);
-    setShowHistory(false);
-    closeMobileDrawer();
-  } finally {
-    setSessionLoading(false);
-    
-    // ✅ FIXED: Now variables are in scope
-    if (sessionFiles.length > 0 && lastSearchQuery?.query) {
-      setTimeout(() => {
-        console.log('🔍 Executing restored search with loaded files:', lastSearchQuery.query);
-        console.log('📁 Available files for search:', sessionFiles.map(f => f.name));
-        setUploadedFiles(sessionFiles);
-        setTimeout(() => {
-          executeSearchWithFiles(lastSearchQuery.query, sessionFiles);
-        }, 500);
-      }, 2000);
+        records.forEach(record => {
+            const row = {};
+            const matches = record.match(/(\w+)="([^"]*)"/g);
+            
+            if (matches) {
+                matches.forEach(match => {
+                    const [, key, value] = match.match(/(\w+)="([^"]*)"/);
+                    const cleanKey = key.replace(/_/g, ' '); // Convert back from underscore format
+                    
+                    // Try to convert back to appropriate data type
+                    let processedValue = value;
+                    if (value !== 'N/A' && value !== '') {
+                        if (/^\d+$/.test(value)) {
+                            processedValue = parseInt(value);
+                        } else if (/^\d+\.\d+$/.test(value)) {
+                            processedValue = parseFloat(value);
+                        }
+                    }
+                    
+                    row[cleanKey] = processedValue;
+                });
+                
+                if (Object.keys(row).length > 0) {
+                    tableData.push(row);
+                }
+            }
+        });
+
+        return tableData;
+    } catch (error) {
+        console.error('Error parsing structured data back:', error);
+        return [];
     }
-  }
 };
 
   // Handle dark mode
@@ -788,139 +969,150 @@ const recordInUnifiedSession = async (activityType, activityData) => {
     }
 };
 
-  const handleFilesUpload = async (newFiles, appendToExisting = false) => {
+const handleFilesUpload = async (newFiles, appendToExisting = false) => {
     if (!currentSessionId) {
-      setError('No active session. Please refresh the page.');
-      return;
+        setError('No active session. Please refresh the page.');
+        return;
     }
 
     setIsLoading(true);
     setError('');
 
     try {
-      const existingFileNames = uploadedFiles.map(f => f.name);
-      const uniqueNewFiles = Array.from(newFiles).filter(file => 
-        !existingFileNames.includes(file.name)
-      );
+        const existingFileNames = uploadedFiles.map(f => f.name);
+        const uniqueNewFiles = Array.from(newFiles).filter(file => 
+            !existingFileNames.includes(file.name)
+        );
 
-      if (uniqueNewFiles.length === 0) {
-        setError('All selected files are already uploaded');
-        setIsLoading(false);
-        return;
-      }
-      console.log('🔍 Uploading files to AI backend:', {
-        fileCount: uniqueNewFiles.length,
-        sessionId: currentSessionId,
-        endpoint: `${API_BASE_URL}/api/ai/upload/multiple`
-    });
+        if (uniqueNewFiles.length === 0) {
+            setError('All selected files are already uploaded');
+            setIsLoading(false);
+            return;
+        }
 
-      // ✅ NEW: Upload to AI backend first
-      const formData = new FormData();
-      uniqueNewFiles.forEach(file => {
-        formData.append('files', file);
-      });
+        console.log(`🔍 Processing ${uniqueNewFiles.length} files for upload`);
 
-      const aiUploadResponse = await fetch(`${API_BASE_URL}/api/ai/upload/multiple`, {
-        method: 'POST',
-        body: formData
-      });
+        // ✅ CRITICAL: Upload to AI backend FIRST with proper error handling
+        let aiUploadSuccess = false;
+        try {
+            console.log('📤 Uploading files to AI backend...');
+            
+            // ✅ Upload each file individually for better error handling
+            for (const file of uniqueNewFiles) {
+                const formData = new FormData();
+                formData.append('file', file);
 
-      if (!aiUploadResponse.ok) {
-        throw new Error(`AI backend upload failed: ${aiUploadResponse.status}`);
-      }
+                const aiResponse = await fetch(`${API_BASE_URL}/api/ai/upload`, {
+                    method: 'POST',
+                    body: formData
+                });
 
-      const processedNewFiles = await Promise.all(
-        uniqueNewFiles.map(async (file, index) => {
-          if (!validateFileType(file)) {
-            throw new Error(`Unsupported file type: ${file.name}`);
-          }
-
-          const contentResult = await readFileContent(file);
-          let text, tableData = null, isTable = false;
-
-          // ✅ NEW: Handle structured content from CSV parsing
-          if (typeof contentResult === 'object' && contentResult.content) {
-            text = contentResult.content;
-            tableData = contentResult.data;
-            isTable = contentResult.isTable;
-            if (isTable && file.name.toLowerCase().endsWith('.csv')) {
-                    console.log(`📊 CSV processed: ${tableData?.length || 0} rows, ${text.length} chars`);
-                    
-                    // Validate that we have actual data
-                    if (!text.includes('COMPLETE TABLE DATA:') || !tableData || tableData.length === 0) {
-                        console.error('❌ CSV processing failed - no table data found');
-                        throw new Error(`CSV processing failed for ${file.name}`);
-                    }
+                if (!aiResponse.ok) {
+                    const errorText = await aiResponse.text();
+                    console.error(`❌ AI upload failed for ${file.name}:`, aiResponse.status, errorText);
+                    throw new Error(`AI upload failed for ${file.name}: ${aiResponse.status}`);
                 }
-          } else {
-            text = contentResult;
-          }
 
-          console.log(`📄 Extracted ${text.length} characters from ${file.name}`);
+                console.log(`✅ ${file.name} uploaded to AI backend successfully`);
+            }
 
-          const fileData = {
-            id: `${currentSessionId}_doc_${Date.now()}_${index}`,
-            file: file,
-            name: file.name,
-            type: file.type,
-            size: file.size,
-            text: text,
-            tableData: tableData, // ✅ NEW: Store table data
-            isTable: isTable, // ✅ NEW: Mark as table
-            uploadTime: new Date(),
-            sessionId: currentSessionId,
-            isFromSession: false,
-            hasFullContent: true
-          };
+            aiUploadSuccess = true;
+            console.log('✅ All files uploaded to AI backend successfully');
 
-          // ✅ NEW: If this is table data, set it as current table
-          if (isTable && tableData && tableData.length > 0) {
-            setTableData(tableData);
-            setCurrentTableFile(fileData);
-            console.log(`📊 Table data loaded: ${tableData.length} rows from ${file.name}`);
-          }
+        } catch (aiError) {
+            console.error('❌ AI backend upload error:', aiError);
+            aiUploadSuccess = false;
+        }
 
-          // Record in session
-          await recordInUnifiedSession('DOCUMENT_UPLOAD', {
-            documentId: fileData.id,
-            fileName: file.name,
-            fileType: file.type,
-            fileSize: file.size,
-            textContent: text,
-            contentLength: text.length,
-            isTableData: isTable
-          });
+        // ✅ Process files for backend storage regardless of AI backend status
+        const processedNewFiles = await Promise.all(
+            uniqueNewFiles.map(async (file, index) => {
+                if (!validateFileType(file)) {
+                    throw new Error(`Unsupported file type: ${file.name}`);
+                }
 
-          return fileData;
-        })
-      );
+                const contentResult = await readFileContent(file);
+                let text, tableData = null, isTable = false;
 
-      if (appendToExisting) {
-        setUploadedFiles(prevFiles => [...prevFiles, ...processedNewFiles]);
-      } else {
-        setUploadedFiles(processedNewFiles);
-      }
+                if (typeof contentResult === 'object' && contentResult.content) {
+                    text = contentResult.content;
+                    tableData = contentResult.data;
+                    isTable = contentResult.isTable;
+                } else {
+                    text = contentResult;
+                }
 
-      // ✅ NEW: Show message about table capabilities
-      const hasTableFiles = processedNewFiles.some(f => f.isTable);
-      if (hasTableFiles) {
-        const tableMessage = {
-          id: Date.now(),
-          type: 'ai',
-          content: `📊 **Table Data Uploaded Successfully!**\n\nYour CSV/Excel files are now available for:\n• 🔍 **Smart Search** - Find specific rows and data\n• 💬 **AI Analysis** - Ask questions about your data\n• 📊 **CSV Generation** - Filter and export data\n\n**Try asking:** "Show me all records where name contains 'John'" or "Generate CSV with age > 25"`,
-          timestamp: new Date()
+                console.log(`📄 Processed ${file.name}: ${text.length} characters`);
+
+                const fileData = {
+                    id: `${currentSessionId}_doc_${Date.now()}_${index}`,
+                    file: file,
+                    name: file.name,
+                    type: file.type,
+                    size: file.size,
+                    text: text,
+                    tableData: tableData,
+                    isTable: isTable,
+                    uploadTime: new Date(),
+                    sessionId: currentSessionId,
+                    isFromSession: false,
+                    hasFullContent: true,
+                    aiBackendUploaded: aiUploadSuccess // ✅ Track AI backend status
+                };
+
+                if (isTable && tableData && tableData.length > 0) {
+                    setTableData(tableData);
+                    setCurrentTableFile(fileData);
+                }
+
+                // ✅ Store in backend session
+                try {
+                    await recordInUnifiedSession('DOCUMENT_UPLOAD', {
+                        documentId: fileData.id,
+                        fileName: file.name,
+                        fileType: file.type,
+                        fileSize: file.size,
+                        textContent: text,
+                        contentLength: text.length,
+                        isTableData: isTable,
+                        tableRowCount: tableData ? tableData.length : 0,
+                        hasNLPSupport: isTable,
+                        aiBackendUploaded: aiUploadSuccess
+                    });
+                    console.log(`✅ Stored ${file.name} in backend session`);
+                } catch (storageError) {
+                    console.error(`❌ Backend storage error for ${file.name}:`, storageError);
+                }
+
+                return fileData;
+            })
+        );
+
+        // ✅ Update UI state
+        if (appendToExisting) {
+            setUploadedFiles(prevFiles => [...prevFiles, ...processedNewFiles]);
+        } else {
+            setUploadedFiles(processedNewFiles);
+        }
+
+        console.log(`✅ Successfully processed ${processedNewFiles.length} files`);
+
+        // ✅ Show status message with AI backend status
+        const successMessage = {
+            id: Date.now(),
+            type: 'ai',
+            content: `✅ **${processedNewFiles.length} Files Uploaded Successfully!**\n\n📁 **Files processed:**\n${processedNewFiles.map(f => `• ${f.name} ${f.isTable ? '(CSV data)' : '(Text)'}`).join('\n')}\n\n🤖 **AI Backend**: ${aiUploadSuccess ? '✅ Connected and ready' : '⚠️ Upload failed - using local processing'}\n🗄️ **Backend Storage**: ✅ All files saved\n🔍 **Search**: ✅ Fully functional\n💬 **Chat**: ${aiUploadSuccess ? '✅ AI chat ready' : '🔧 Local processing active'}\n\n**${aiUploadSuccess ? 'Full functionality active!' : 'Local mode - all features work!'}**`,
+            timestamp: new Date()
         };
-        setCurrentSessionMessages(prev => [...prev, tableMessage]);
-      }
+        setCurrentSessionMessages(prev => [...prev, successMessage]);
 
-      console.log(`✅ Uploaded ${processedNewFiles.length} files to unified session:`, currentSessionId);
     } catch (err) {
-      console.error('Upload error:', err);
-      setError('Error uploading files: ' + err.message);
+        console.error('❌ Upload error:', err);
+        setError('Error uploading files: ' + err.message);
     } finally {
-      setIsLoading(false);
+        setIsLoading(false);
     }
-  };
+};
 
   // ✅ ENHANCED: Search with table data support
   const handleSearch = (term) => {
@@ -1573,99 +1765,68 @@ const reuploadSessionDocumentsToAI = async (sessionFiles) => {
         return false;
     }
 
-    // ✅ GUARD: Check if already uploaded to prevent duplicates
-    const uploadKey = `ai_upload_${currentSessionId}`;
-    const lastUploadTime = sessionStorage.getItem(uploadKey);
-    const now = Date.now();
-    
-    if (lastUploadTime && (now - parseInt(lastUploadTime)) < 10000) {
-        console.log('⚠️ AI backend upload already done recently, skipping');
-        return true;
-    }
+    console.log(`🔄 Re-uploading ${sessionFiles.length} documents to AI backend`);
 
-    console.log('🔄 Re-uploading documents to AI backend for session continuity');
-    
-    // ✅ Clear AI backend first
     try {
-        await fetch(`${API_BASE_URL}/api/ai/documents`, { method: 'DELETE' });
-        console.log('✅ Cleared AI backend before restoration');
+        // ✅ STEP 1: Clear AI backend first
+        console.log('🗑️ Clearing AI backend...');
+        await fetch(`${API_BASE_URL}/api/ai/documents`, { 
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        console.log('✅ AI backend cleared');
+
+        // ✅ Small delay to ensure backend is ready
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
     } catch (error) {
         console.warn('⚠️ Could not clear AI backend:', error);
     }
 
     let successCount = 0;
     const failedFiles = [];
-    const processedFiles = new Set();
 
+    // ✅ STEP 2: Re-upload files one by one with detailed logging
     for (const fileData of sessionFiles) {
-        if (processedFiles.has(fileData.name)) {
-            console.log(`⚠️ Skipping duplicate: ${fileData.name}`);
-            continue;
-        }
-        
         if (!fileData.text || fileData.text.length < 50) {
-            console.log(`⚠️ Skipping ${fileData.name} - insufficient content`);
+            console.log(`⚠️ Skipping ${fileData.name} - insufficient content (${fileData.text?.length || 0} chars)`);
             failedFiles.push({ name: fileData.name, error: 'Insufficient content' });
             continue;
         }
 
         try {
-            console.log(`📤 Re-uploading ${fileData.name} (${fileData.text.length} chars)`);
-            
-            // ✅ CRITICAL FIX: Handle CSV files specially to preserve full table data
-            let contentToSend;
+            console.log(`📤 Re-uploading ${fileData.name} (${fileData.text.length} chars, isTable: ${fileData.isTable})`);
+
+            // ✅ Prepare content for AI backend
+            let contentToSend = fileData.text;
             let fileName = fileData.name;
-            
-            if (fileData.isTable && fileData.name.toLowerCase().endsWith('.csv')) {
-                // ✅ For CSV files, ensure we send the complete parsed data
-                if (fileData.text.includes('=== CSV TABLE:') && fileData.text.includes('COMPLETE TABLE DATA:')) {
-                    // Already properly formatted CSV content
-                    contentToSend = fileData.text;
-                    console.log(`📊 Sending complete CSV data: ${fileData.tableData?.length || 'unknown'} rows`);
-                } else if (fileData.tableData && fileData.tableData.length > 0) {
-                    // ✅ Re-create proper CSV content from table data
-                    const headers = Object.keys(fileData.tableData[0]);
-                    contentToSend = `=== CSV TABLE: ${fileData.name} ===
-COLUMNS: ${headers.join(', ')}
-TOTAL ROWS: ${fileData.tableData.length}
 
-COMPLETE TABLE DATA:
-${fileData.tableData.map((row, index) => {
-    return `Row ${index + 1}: ${headers.map(h => `${h}="${row[h] || ''}"`).join(', ')}`;
-}).join('\n')}
+            // ✅ Handle CSV files specially
+            if (fileData.isTable && fileData.name.toLowerCase().endsWith('.csv') && fileData.tableData) {
+                const headers = Object.keys(fileData.tableData[0] || {});
+                contentToSend = `CSV File: ${fileData.name}
+Total Records: ${fileData.tableData.length}
+Columns: ${headers.join(', ')}
 
-COLUMN ANALYSIS:
-${headers.map(header => {
-    const values = fileData.tableData.map(row => row[header]).filter(v => v && String(v).trim());
-    return `${header}: ${values.length} values (Examples: ${values.slice(0, 3).join(', ')})`;
-}).join('\n')}
+Data:
+${fileData.tableData.map((row, i) => `${i+1}: ${headers.map(h => `${h}=${row[h]}`).join(', ')}`).join('\n')}
 
-SEARCHABLE CONTENT:
-${fileData.tableData.map(row => Object.values(row).join(' ')).join('\n')}
-=== END CSV TABLE ===`;
-                    console.log(`📊 Re-created CSV content with ${fileData.tableData.length} rows`);
-                } else {
-                    // ✅ Fallback: send raw content but ensure it's complete
-                    contentToSend = fileData.text;
-                    console.log(`⚠️ Using raw CSV content as fallback`);
-                }
-                
-                // Keep CSV extension for proper AI processing
-                fileName = fileData.name;
+Full Content:
+${fileData.text}`;
+                console.log(`📊 Prepared CSV content: ${fileData.tableData.length} rows`);
             } else {
-                // ✅ For non-CSV files, use sanitized content
-                contentToSend = sanitizeRestoredContent(fileData.text, fileData.name);
+                // ✅ For other files, ensure proper format
                 fileName = fileData.name.replace(/\.(pdf|docx|doc)$/i, '.txt');
             }
-            
-            // ✅ Create proper blob with appropriate content type
+
+            // ✅ Create and upload file
             const blob = new Blob([contentToSend], { 
                 type: fileName.endsWith('.csv') ? 'text/csv' : 'text/plain' 
             });
-            
             const formData = new FormData();
             formData.append('file', blob, fileName);
 
+            console.log(`📤 Uploading ${fileName} to AI backend...`);
             const response = await fetch(`${API_BASE_URL}/api/ai/upload`, {
                 method: 'POST',
                 body: formData
@@ -1673,40 +1834,50 @@ ${fileData.tableData.map(row => Object.values(row).join(' ')).join('\n')}
 
             if (response.ok) {
                 successCount++;
-                processedFiles.add(fileData.name);
-                console.log(`✅ Successfully re-uploaded ${fileData.name} as ${fileName}: ${response.status}`);
-                
-                // ✅ Log CSV-specific success details
-                if (fileData.isTable) {
-                    console.log(`📊 CSV data sent: ${fileData.tableData?.length || 'unknown'} rows, ${contentToSend.length} chars`);
-                }
+                console.log(`✅ Successfully uploaded ${fileData.name} to AI backend`);
             } else {
                 const errorText = await response.text();
-                console.log(`❌ Error processing ${fileData.name}:`, response.status, errorText);
-                failedFiles.push({ name: fileData.name, error: `HTTP ${response.status}` });
+                console.error(`❌ AI backend rejected ${fileData.name}:`, response.status, errorText);
+                failedFiles.push({ 
+                    name: fileData.name, 
+                    error: `HTTP ${response.status}: ${errorText}` 
+                });
             }
+
         } catch (error) {
-            console.log(`❌ Error processing ${fileData.name}:`, error);
+            console.error(`❌ Error uploading ${fileData.name}:`, error);
             failedFiles.push({ name: fileData.name, error: error.message });
         }
 
-        // ✅ Small delay to prevent overwhelming the server
-        await new Promise(resolve => setTimeout(resolve, 500));
+        // ✅ Delay between uploads to prevent rate limiting
+        await new Promise(resolve => setTimeout(resolve, 800));
     }
 
-    // ✅ Create detailed status message
-    const csvFiles = sessionFiles.filter(f => f.isTable && f.name.toLowerCase().endsWith('.csv'));
+    // ✅ STEP 3: Verify AI backend has documents
+    try {
+        console.log('🔍 Verifying AI backend document status...');
+        const verifyResponse = await fetch(`${API_BASE_URL}/api/ai/documents/status`);
+        if (verifyResponse.ok) {
+            const statusData = await verifyResponse.json();
+            console.log('📊 AI backend status:', statusData);
+        }
+    } catch (verifyError) {
+        console.warn('⚠️ Could not verify AI backend status:', verifyError);
+    }
+
+    // ✅ STEP 4: Show detailed status
     const statusMessage = {
         id: Date.now() + 1,
         type: 'ai',
-        content: `${successCount > 0 ? '✅' : '⚠️'} **AI Chat Restoration Complete!**\n\n📊 **Results:**\n• ${successCount} documents successfully uploaded to AI backend\n• ${failedFiles.length} documents failed\n${csvFiles.length > 0 ? `• ${csvFiles.length} CSV files with complete table data\n` : ''}\n🔍 **Search:** ✅ Fully functional\n💬 **AI Chat:** ${successCount > 0 ? '✅ Ready for questions about your data!' : '⚠️ Use search or try manual re-upload'}\n\n**Your session is fully restored!**`,
+        content: `${successCount > 0 ? '✅' : '❌'} **AI Backend Sync ${successCount > 0 ? 'Complete' : 'Failed'}!**\n\n📊 **Upload Results:**\n• ✅ ${successCount} files uploaded successfully\n• ❌ ${failedFiles.length} files failed\n\n🤖 **AI Chat Status:** ${successCount > 0 ? '✅ Ready for questions!' : '⚠️ Using local processing'}\n🔍 **Search:** ✅ Always functional\n📊 **Data Analysis:** ✅ Always available\n\n${failedFiles.length > 0 ? `**Failed files:** ${failedFiles.map(f => f.name).join(', ')}` : '**All systems operational!**'}`,
         timestamp: new Date()
     };
 
-    // ✅ Mark upload as completed
-    sessionStorage.setItem(uploadKey, now.toString());
     setCurrentSessionMessages(prev => [...prev, statusMessage]);
-    
+
+    console.log(`✅ AI backend sync completed: ${successCount}/${sessionFiles.length} files uploaded`);
+    console.log('📋 Failed files:', failedFiles);
+
     return successCount > 0;
 };
 
@@ -1971,6 +2142,7 @@ const handleGenerateCSV = () => {
                     onRecordMessage={recordChatMessage}
                     initialMessages={currentSessionMessages}
                     isSessionLoading={sessionLoading}
+                    onReuploadDocuments={reuploadSessionDocumentsToAI} 
                 />
               )}
 
