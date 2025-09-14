@@ -761,15 +761,15 @@ const tryAIQuery = useCallback(async (question) => {
         return "No documents available for summary generation.";
     }
 
-    let summary = `📋 **Comprehensive Multi-Document Analysis**\n\n`;
-    summary += `📊 **Overview:**\n`;
+    let summary = `📋Comprehensive Document Analysis\n\n`;
+    summary += `📊 Overview:\n`;
     summary += `• Total Documents: ${files.length}\n`;
     summary += `• Total Content: ${files.reduce((sum, f) => sum + (f.text?.length || 0), 0).toLocaleString()} characters\n`;
     summary += `• CSV/Data Files: ${files.filter(f => f.isTable).length}\n`;
     summary += `• Text Documents: ${files.filter(f => !f.isTable).length}\n\n`;
 
     // ✅ ANALYZE EACH FILE
-    summary += `📄 **Document Analysis:**\n\n`;
+    summary += `📄 Document Analysis:\n\n`;
     files.forEach((file, index) => {
         summary += `**${index + 1}. ${file.name}**\n`;
         
@@ -827,11 +827,11 @@ const getSummary = async () => {
     if (isLoading || (!filesUploaded && uploadedFiles.length === 0)) return;
 
     // Check minimum files requirement
-    if (uploadedFiles.length < 2) {
+    if (uploadedFiles.length < 1) {
         const minFilesMessage = {
             id: Date.now(),
             type: 'ai',
-            content: `📄 **Multi-Document Analysis Required**\n\nPlease upload at least 2 documents to generate a comprehensive summary and PDF report.\n\n**Current files:** ${uploadedFiles.length}\n**Required:** 2 or more`,
+            content: `📄Document Analysis Required\n\nPlease upload at least 1 documents to generate a comprehensive summary and PDF report.\n\nCurrent files: ${uploadedFiles.length}\n**Required`,
             timestamp: new Date()
         };
         setMessages(prev => [...prev, minFilesMessage]);
@@ -957,7 +957,7 @@ const getSummary = async () => {
         // ✅ HEADER SECTION
         doc.setFontSize(20);
         doc.setFont("helvetica", "bold");
-        doc.text("📋 Multi-Document Analysis Report", margin, yPosition);
+        doc.text("Document Analysis Report", margin, yPosition);
         yPosition += lineHeight * 2;
 
         // ✅ METADATA SECTION
@@ -1011,7 +1011,7 @@ const getSummary = async () => {
         // ✅ MAIN CONTENT SECTION
         doc.setFontSize(14);
         doc.setFont("helvetica", "bold");
-        doc.text("📊 Analysis Summary:", margin, yPosition);
+        doc.text("Analysis Summary:", margin, yPosition);
         yPosition += lineHeight * 1.5;
 
         // Clean and format the summary content
@@ -1263,18 +1263,18 @@ const getSummary = async () => {
 <div className="summary-actions" style={{display: 'flex', gap: '10px', marginTop: '2px'}}>
     <button 
         onClick={getSummary}
-        disabled={isLoading || (!filesUploaded && uploadedFiles.length === 0) || uploadedFiles.length < 2}
+        disabled={isLoading || (!filesUploaded && uploadedFiles.length === 0) || uploadedFiles.length < 1}
         className="summary-btn"
         style={{
             padding: '10px 15px',
-            backgroundColor: uploadedFiles.length >= 2 ? '#007bff' : '#6c757d',
+            backgroundColor: uploadedFiles.length >= 1 ? '#007bff' : '#6c757d',
             color: 'white',
             border: 'none',
             borderRadius: '5px',
             cursor: uploadedFiles.length >= 2 ? 'pointer' : 'not-allowed'
         }}
     >
-        📋 Generate Summary + PDF ({uploadedFiles.length}/2+ files)
+        📋 Generate Summary + PDF
     </button>
   </div>
 
